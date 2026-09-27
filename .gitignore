@@ -1,0 +1,64 @@
+# ==============================
+# IntelliJ IDEA
+# ==============================
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# ==============================
+# Maven
+# ==============================
+target/
+.mvn/timing.properties
+
+# ==============================
+# Temporary files
+# ==============================
+.tmp/
+tmp/
+*.tmp
+*.temp
+
+# ==============================
+# Environment / secrets
+# ==============================
+.env
+.env.*
+!.env.example
+
+# Local Spring configuration containing secrets
+application-local.yml
+application-local.yaml
+application-local.properties
+
+# ==============================
+# Logs
+# ==============================
+*.log
+logs/
+
+# ==============================
+# OS generated files
+# ==============================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ==============================
+# Java
+# ==============================
+*.class
+hs_err_pid*
+
+# ==============================
+# Coverage / test reports
+# ==============================
+coverage/
+jacoco/
+*.exec
+
+# ==============================
+# Docker overrides
+# ==============================
+docker-compose.override.yml

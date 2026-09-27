@@ -1,0 +1,18 @@
+spring:
+  application:
+    name: raidzonbackend
+  profiles:
+    active: postgres # This tells Spring Boot to load application-postgres.yml
+
+server:
+  address: ${SERVER_ADDRESS:127.0.0.1}
+  port: ${PORT:8080}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
