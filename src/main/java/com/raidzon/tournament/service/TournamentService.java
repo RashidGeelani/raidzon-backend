@@ -28,6 +28,7 @@ public class TournamentService {
         if(input.players()==null || (!input.players().isEmpty() && (input.players().size()<7 || input.players().size()>12)) || input.expectedRevision()<0)
             throw new IllegalArgumentException("Save seven starters and up to five substitutes, or clear the roster.");
         var players=input.players().stream().map(player->{
+            if(player==null)throw new IllegalArgumentException("Enter each roster player.");
             var phone=player.phone();
             if(phone==null || !phone.matches("\\+[1-9][0-9]{7,14}"))throw new IllegalArgumentException("Use international player phone numbers.");
             return new Tournament.RosterPlayer(name(player.name(),70),phone);
