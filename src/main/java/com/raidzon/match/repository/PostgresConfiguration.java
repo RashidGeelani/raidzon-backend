@@ -23,8 +23,14 @@ public class PostgresConfiguration {
                                @Value("${raidzon.database.username}") String username,
                                @Value("${raidzon.database.password}") String password) {
         var config = new HikariConfig();
-        config.setJdbcUrl(url); config.setUsername(username); config.setPassword(password);
-        config.setMaximumPoolSize(8); config.setConnectionTimeout(10_000);
+        config.setJdbcUrl(url);
+        config.setUsername(username);
+        config.setPassword(password);
+        config.setMaximumPoolSize(5);
+        config.setMinimumIdle(1);
+        config.setConnectionTimeout(10_000);
+        config.setIdleTimeout(60_000);
+        config.setMaxLifetime(300_000);
         return new HikariDataSource(config);
     }
     @Bean(initMethod = "migrate") Flyway flyway(HikariDataSource dataSource) {
