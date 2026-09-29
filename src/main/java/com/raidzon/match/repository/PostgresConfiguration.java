@@ -30,6 +30,7 @@ public class PostgresConfiguration {
         config.setMaximumPoolSize(3);
         config.setMinimumIdle(1);
         config.setConnectionTimeout(10_000);
+        config.setValidationTimeout(5_000);
         config.setIdleTimeout(60_000);
         config.setMaxLifetime(300_000);
         return new HikariDataSource(config);
