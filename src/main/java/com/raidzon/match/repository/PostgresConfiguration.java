@@ -19,14 +19,15 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Profile("postgres")
 public class PostgresConfiguration {
     @Bean(destroyMethod = "close")
-    HikariDataSource dataSource(@Value("${raidzon.database.url}") String url,
-                               @Value("${raidzon.database.username}") String username,
-                               @Value("${raidzon.database.password}") String password) {
+    HikariDataSource dataSource(
+        @Value("${raidzon.database.url}") String url,
+        @Value("${raidzon.database.username}") String username,
+        @Value("${raidzon.database.password}") String password) {
         var config = new HikariConfig();
         config.setJdbcUrl(url);
         config.setUsername(username);
         config.setPassword(password);
-        config.setMaximumPoolSize(5);
+        config.setMaximumPoolSize(3);
         config.setMinimumIdle(1);
         config.setConnectionTimeout(10_000);
         config.setIdleTimeout(60_000);
