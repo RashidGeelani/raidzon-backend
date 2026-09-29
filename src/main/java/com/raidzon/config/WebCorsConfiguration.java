@@ -13,7 +13,7 @@ public class WebCorsConfiguration implements WebMvcConfigurer {
     private final String[] allowedOrigins;
 
     public WebCorsConfiguration(
-        @Value("${RAIDZON_CORS_ORIGINS}") String origins) {
+        @Value("${RAIDZON_CORS_ORIGINS:https://raidzon-frontend.vercel.app,http://127.0.0.1:5173,http://127.0.0.1:4173}") String origins) {
 
         this.allowedOrigins = Arrays.stream(origins.split(","))
             .map(String::trim)

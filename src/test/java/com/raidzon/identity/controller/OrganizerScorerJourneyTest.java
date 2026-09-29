@@ -19,7 +19,7 @@ import java.util.*;
 import java.util.stream.IntStream;
 import static org.junit.jupiter.api.Assertions.*;
 
-@SpringBootTest(webEnvironment=SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(webEnvironment=SpringBootTest.WebEnvironment.RANDOM_PORT, properties="raidzon.officials.enabled=true")
 @ActiveProfiles("postgres") @Import({AuthHttpTest.SmsConfig.class,OrganizerScorerJourneyTest.BlockingClientConfig.class})
 @EnabledIfEnvironmentVariable(named="RAIDZON_TEST_DATABASE_URL",matches=".+")
 class OrganizerScorerJourneyTest {

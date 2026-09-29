@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-@SpringBootTest @AutoConfigureMockMvc @ActiveProfiles("postgres") @Import(AuthHttpTest.SmsConfig.class)
+@SpringBootTest(properties="raidzon.officials.enabled=true") @AutoConfigureMockMvc @ActiveProfiles("postgres") @Import(AuthHttpTest.SmsConfig.class)
 @EnabledIfEnvironmentVariable(named="RAIDZON_TEST_DATABASE_URL",matches=".+")
 class AuthHttpTest {
     @Autowired com.raidzon.identity.service.AuthService auth;
@@ -180,6 +180,12 @@ class AuthHttpTest {
         assertEquals("+919876543200",playerResponse.path("phone").asText());
         assertEquals("Player 00",playerResponse.path("playerProfile").path("name").asText());
         assertTrue(playerResponse.path("playerProfile").path("matchCount").asLong()>=1);
+        assertEquals(0,playerResponse.path("playerProfile").path("raidPoints").asLong());
+        assertEquals(0,playerResponse.path("playerProfile").path("tacklePoints").asLong());
+        assertEquals(0,playerResponse.path("playerProfile").path("superRaids").asLong());
+        assertEquals(0,playerResponse.path("playerProfile").path("superTackles").asLong());
+        assertEquals(0,playerResponse.path("tournamentCount").asLong());
+        assertEquals(0,playerResponse.path("teamCount").asLong());
         assertEquals(0,playerResponse.path("ownedMatchCount").asLong());
         assertTrue(playerResponse.path("recentMatches").isEmpty());
         var ownerResponse=json.readTree(http.perform(get("/api/v1/account/dashboard").header("Authorization","Bearer "+scorer))
