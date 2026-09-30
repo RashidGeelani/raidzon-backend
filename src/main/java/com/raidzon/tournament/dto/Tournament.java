@@ -21,4 +21,5 @@ public record Tournament(UUID id, String name, String venue, LocalDate startsOn,
     public record Detail(Tournament tournament, List<Team> teams, List<Fixture> fixtures, List<Standing> standings) {}
     public record PublicTeam(UUID id, String name, List<String> players) {}
     public record PublicDetail(Tournament tournament, List<PublicTeam> teams, List<Fixture> fixtures, List<Standing> standings) {}
+    public record PlayerRanking(UUID playerId,String name,long matches,long raidPoints,long tacklePoints) {}
 }

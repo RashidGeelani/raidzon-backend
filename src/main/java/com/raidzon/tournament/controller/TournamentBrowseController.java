@@ -15,6 +15,8 @@ public class TournamentBrowseController {
     public TournamentBrowseController(TournamentService tournaments){this.tournaments=tournaments;}
     @GetMapping("/public/tournaments")
     public List<Tournament> browse(@RequestParam(defaultValue="") String search){return tournaments.browse(search);}
+    @GetMapping("/public/leaderboards")
+    public List<Tournament.PlayerRanking> leaderboard(@RequestParam(required=false) UUID tournamentId,@RequestParam(defaultValue="raid") String category){return tournaments.leaderboard(tournamentId,category);}
     @GetMapping("/public/tournaments/{id}")
     public Tournament.PublicDetail detail(@PathVariable UUID id){return tournaments.publicDetail(id);}
     @GetMapping("/account/joined-tournaments")

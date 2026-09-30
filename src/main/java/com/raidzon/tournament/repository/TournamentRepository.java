@@ -21,6 +21,22 @@ public class TournamentRepository {
     public List<Tournament> browse(String search) {
         return jdbc.query("SELECT * FROM tournaments WHERE position(lower(?) in lower(name || ' ' || venue))>0 ORDER BY starts_on DESC,id LIMIT 100",ROW,search);
     }
+    public List<Tournament.PlayerRanking> leaderboard(UUID tournamentId,String category){
+        String order=switch(category){case "raid"->"raid_points";case "tackle"->"tackle_points";default->"total_points";};
+        return jdbc.query("""
+            SELECT p.id,p.initial_name,count(DISTINCT m.id) AS played,
+                COALESCE(sum((player.value->>'raidPoints')::bigint),0) AS raid_points,
+                COALESCE(sum((player.value->>'tacklePoints')::bigint),0) AS tackle_points,
+                COALESCE(sum((player.value->>'raidPoints')::bigint + (player.value->>'tacklePoints')::bigint),0) AS total_points
+            FROM match_player_links l JOIN player_profiles p ON p.id=l.profile_id JOIN matches m ON m.id=l.match_id
+            CROSS JOIN LATERAL jsonb_array_elements(m.projection->'teams') AS team(value)
+            CROSS JOIN LATERAL jsonb_array_elements(team.value->'players') AS player(value)
+            WHERE player.value->>'id'=l.local_player_id::text AND m.projection->>'status'='COMPLETED'
+                AND EXISTS(SELECT 1 FROM tournament_fixtures f WHERE f.match_id=m.id AND (?::uuid IS NULL OR f.tournament_id=?))
+            GROUP BY p.id,p.initial_name ORDER BY
+            """+order+" DESC,p.initial_name,p.id LIMIT 100",
+            (r,i)->new Tournament.PlayerRanking(r.getObject("id",UUID.class),r.getString("initial_name"),r.getLong("played"),r.getLong("raid_points"),r.getLong("tackle_points")),tournamentId,tournamentId);
+    }
     public Tournament.PublicDetail publicDetail(UUID id) {
         var owners=jdbc.queryForList("SELECT owner_account_id FROM tournaments WHERE id=?",UUID.class,id);
         if(owners.isEmpty()) throw new AuthFailure(404,"TOURNAMENT_NOT_FOUND","Tournament not found.");

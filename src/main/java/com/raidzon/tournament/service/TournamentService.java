@@ -20,6 +20,10 @@ public class TournamentService {
     }
     @Transactional(readOnly=true) public Tournament.PublicDetail publicDetail(UUID id){return repository.publicDetail(id);}
     public List<UUID> joined(UUID account){return repository.joined(account);}
+    public List<Tournament.PlayerRanking> leaderboard(UUID id,String category){
+        if(!List.of("raid","tackle","total").contains(category)) throw new IllegalArgumentException("Unknown leaderboard category.");
+        return repository.leaderboard(id,category);
+    }
     @Transactional public void join(UUID id,UUID account){repository.join(id,account);}
     @Transactional public void leave(UUID id,UUID account){repository.leave(id,account);}
     public Tournament.Detail detail(UUID id, UUID owner){return repository.detail(id,owner);}
