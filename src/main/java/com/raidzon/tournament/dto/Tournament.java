@@ -19,4 +19,6 @@ public record Tournament(UUID id, String name, String venue, LocalDate startsOn,
     public record Standing(UUID teamId, String teamName, int rank, int played, int won, int drawn, int lost,
                            int tablePoints, int pointsFor, int pointsAgainst, int scoreDifference) {}
     public record Detail(Tournament tournament, List<Team> teams, List<Fixture> fixtures, List<Standing> standings) {}
+    public record PublicTeam(UUID id, String name, List<String> players) {}
+    public record PublicDetail(Tournament tournament, List<PublicTeam> teams, List<Fixture> fixtures, List<Standing> standings) {}
 }

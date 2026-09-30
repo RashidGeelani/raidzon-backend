@@ -88,6 +88,21 @@ class AuthHttpTest {
         postJson(rosterPath,rosterInput,other,404);
         var rosterSaved=postJson(rosterPath,rosterInput,owner,200);
         assertEquals(7,rosterSaved.path("teams").get(0).path("roster").size());
+        var publicResponse=http.perform(get("/api/v1/public/tournaments/"+tournament))
+            .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertFalse(publicResponse.contains("phone"));
+        assertFalse(publicResponse.contains("+9198765440"));
+        assertTrue(publicResponse.contains("Raider 0"));
+        http.perform(get("/api/v1/public/tournaments").param("search",input.get("name").toString()))
+            .andExpect(status().isOk());
+        postJson("/tournaments/"+tournament+"/join",Map.of(),null,401);
+        postJson("/tournaments/"+tournament+"/join",Map.of(),other,200);
+        postJson("/tournaments/"+tournament+"/join",Map.of(),other,200);
+        var joined=json.readTree(http.perform(get("/api/v1/account/joined-tournaments").header("Authorization","Bearer "+other))
+            .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        assertEquals(1,joined.size());
+        assertEquals(tournament.toString(),joined.get(0).asText());
+        postJson(rosterPath,rosterInput,other,404);
         assertEquals(1,postJson(rosterPath,rosterInput,owner,200).path("teams").get(0).path("rosterRevision").asInt());
         postJson(rosterPath,Map.of("players",List.of(),"expectedRevision",0),owner,409);
         postJson("/tournaments/"+tournament+"/teams/"+b+"/roster",Map.of("players",roster,"expectedRevision",0),owner,409);

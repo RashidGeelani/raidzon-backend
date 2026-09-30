@@ -18,6 +18,27 @@ public class TournamentRepository {
     public List<Tournament> list(UUID owner) {
         return jdbc.query("SELECT * FROM tournaments WHERE owner_account_id=? ORDER BY created_at DESC,id",ROW,owner);
     }
+    public List<Tournament> browse(String search) {
+        return jdbc.query("SELECT * FROM tournaments WHERE position(lower(?) in lower(name || ' ' || venue))>0 ORDER BY starts_on DESC,id LIMIT 100",ROW,search);
+    }
+    public Tournament.PublicDetail publicDetail(UUID id) {
+        var owners=jdbc.queryForList("SELECT owner_account_id FROM tournaments WHERE id=?",UUID.class,id);
+        if(owners.isEmpty()) throw new AuthFailure(404,"TOURNAMENT_NOT_FOUND","Tournament not found.");
+        var detail=detail(id,owners.getFirst());
+        return new Tournament.PublicDetail(detail.tournament(),detail.teams().stream().map(team ->
+            new Tournament.PublicTeam(team.id(),team.name(),team.roster().stream().map(Tournament.RosterPlayer::name).toList())).toList(),detail.fixtures(),detail.standings());
+    }
+    public List<UUID> joined(UUID account) {
+        return jdbc.queryForList("SELECT tournament_id FROM tournament_followers WHERE account_id=? ORDER BY joined_at DESC",UUID.class,account);
+    }
+    public void join(UUID id, UUID account) {
+        if(jdbc.queryForObject("SELECT count(*) FROM tournaments WHERE id=?",Integer.class,id)==0)
+            throw new AuthFailure(404,"TOURNAMENT_NOT_FOUND","Tournament not found.");
+        jdbc.update("INSERT INTO tournament_followers(tournament_id,account_id) VALUES (?,?) ON CONFLICT DO NOTHING",id,account);
+    }
+    public void leave(UUID id, UUID account) {
+        jdbc.update("DELETE FROM tournament_followers WHERE tournament_id=? AND account_id=?",id,account);
+    }
     public Tournament owned(UUID id, UUID owner, boolean lock) {
         var rows=jdbc.query("SELECT * FROM tournaments WHERE id=? AND owner_account_id=?"+(lock?" FOR UPDATE":""),ROW,id,owner);
         if(rows.isEmpty()) throw new AuthFailure(404,"TOURNAMENT_NOT_FOUND","Tournament not found in your account.");

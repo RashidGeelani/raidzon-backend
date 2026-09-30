@@ -13,6 +13,15 @@ public class TournamentService {
     private final TournamentRepository repository;
     public TournamentService(TournamentRepository repository){this.repository=repository;}
     public List<Tournament> list(UUID owner){return repository.list(owner);}
+    public List<Tournament> browse(String search) {
+        String query=search.trim();
+        if(query.length()>100) throw new com.raidzon.identity.service.AuthFailure(400,"INVALID_SEARCH","Search must be 100 characters or fewer.");
+        return repository.browse(query);
+    }
+    @Transactional(readOnly=true) public Tournament.PublicDetail publicDetail(UUID id){return repository.publicDetail(id);}
+    public List<UUID> joined(UUID account){return repository.joined(account);}
+    @Transactional public void join(UUID id,UUID account){repository.join(id,account);}
+    @Transactional public void leave(UUID id,UUID account){repository.leave(id,account);}
     public Tournament.Detail detail(UUID id, UUID owner){return repository.detail(id,owner);}
     @Transactional public Tournament.Detail create(Tournament input,UUID owner){
         required(input.id());
