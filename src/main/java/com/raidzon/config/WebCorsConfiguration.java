@@ -13,7 +13,7 @@ public class WebCorsConfiguration implements WebMvcConfigurer {
     private final String[] allowedOrigins;
 
     public WebCorsConfiguration(
-        @Value("${RAIDZON_CORS_ORIGINS:https://raidzon.com,https://www.raidzon.com,https://raidzon-frontend.vercel.app,http://127.0.0.1:5173,http://127.0.0.1:4173}") String origins) {
+        @Value("${RAIDZON_CORS_ORIGINS:https://raidzon.com,https://www.raidzon.com,https://raidzon.in,https://www.raidzon.in,https://raidzon-frontend.vercel.app,http://127.0.0.1:5173,http://127.0.0.1:4173}") String origins) {
 
         this.allowedOrigins = Arrays.stream(origins.split(","))
             .map(String::trim)
@@ -25,7 +25,7 @@ public class WebCorsConfiguration implements WebMvcConfigurer {
     public void addCorsMappings(CorsRegistry registry) {
 
         registry.addMapping("/api/**")
-            .allowedOrigins(gig)
+            .allowedOrigins(allowedOrigins)
             .allowedMethods(
                 "GET",
                 "POST",
