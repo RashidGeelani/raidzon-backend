@@ -41,18 +41,27 @@ public final class MatchService {
         return transaction.execute(status -> {
             var match = repository.lock(matchId); authorize(match, actor, session);
             if (!match.ruleset().equals(request.rulesetVersion())) throw new IllegalArgumentException("Cannot mix rulesets within a match.");
-            var stored = repository.events(matchId);
-            for (var event : stored) if (event.request().id().equals(request.id())) {
+            var nearby = repository.eventOrLatest(matchId, request.id(), match.version());
+            for (var event : nearby) if (event.eventId().equals(request.id())) {
                 if (!event.fingerprint().equals(fingerprint)) throw new IllegalArgumentException("Event ID was reused with different facts.");
                 return new EventAcknowledgement(request.id(), event.sequence(), match.version(), true, match.state());
             }
             if (request.baseVersion() != match.version()) throw new IllegalArgumentException("Event version does not match current history.");
             Long started = match.initial().clock().startedAt(); // null for v4 until the first raid
             if (started != null && request.occurredAt() < started) throw new IllegalArgumentException("Event precedes match start.");
-            var history = replay(match, stored);
-            var next = history.append(input);
-            repository.append(matchId, request, fingerprint, next.events().getLast());
-            return new EventAcknowledgement(request.id(), next.version(), next.version(), false, next.state());
+            MatchHistory.Event next;
+            if (input.action() instanceof com.raidzon.match.domain.MatchAction.Undo) {
+                // Undo restores an earlier step, so it needs the verified full history.
+                next = replay(match, repository.events(matchId)).append(input).events().getLast();
+            } else {
+                // Every other tap applies to the stored projection: constant time however long the match is.
+                for (var event : nearby)
+                    if (event.sequence() == match.version() && request.occurredAt() < event.occurredAt())
+                        throw new IllegalArgumentException("Event time cannot move backwards.");
+                next = MatchHistory.step(match.state(), match.version(), input);
+            }
+            repository.append(matchId, request, fingerprint, next);
+            return new EventAcknowledgement(request.id(), next.sequence(), next.sequence(), false, next.result().state());
         });
     }
 

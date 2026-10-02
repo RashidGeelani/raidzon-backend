@@ -47,6 +47,8 @@ public class LiveMatchHub implements ServletContextAware, DisposableBean {
     private final ObjectMapper json;
     private final Set<String> allowedOrigins;
     private final Map<UUID, Set<Session>> watchers = new ConcurrentHashMap<>();
+    /** Whether the last view built for a watched match was public (fast pushes are only sent then). */
+    private final Map<UUID, Boolean> visible = new ConcurrentHashMap<>();
     private final AtomicInteger total = new AtomicInteger();
     private final ExecutorService sender = Executors.newVirtualThreadPerTaskExecutor();
     private final ScheduledExecutorService keepalive = Executors.newSingleThreadScheduledExecutor(Thread.ofVirtual().factory());
@@ -92,7 +94,7 @@ public class LiveMatchHub implements ServletContextAware, DisposableBean {
         var set = watchers.get(matchId);
         if (set != null && set.remove(session)) {
             total.decrementAndGet();
-            if (set.isEmpty()) watchers.remove(matchId, set);
+            if (set.isEmpty() && watchers.remove(matchId, set)) visible.remove(matchId);
         }
     }
 
@@ -106,6 +108,28 @@ public class LiveMatchHub implements ServletContextAware, DisposableBean {
         });
     }
 
+    /**
+     * Push an accepted event immediately from the state the scorer's request just computed (no
+     * database read), then the full view with the event list and players' own names.
+     */
+    public void publish(UUID matchId, int version, com.fasterxml.jackson.databind.JsonNode projection) {
+        var set = watchers.get(matchId);
+        if (set == null || set.isEmpty()) return;
+        if (Boolean.TRUE.equals(visible.get(matchId))) {
+            try {
+                String fast = json.writeValueAsString(Map.of("type", "state", "version", version, "serverTime", System.currentTimeMillis(),
+                        "state", LiveMatchRepository.publicState(projection, json)));
+                for (var session : set) sender.submit(() -> send(session, fast));
+            } catch (Exception error) {
+                log.warn("Fast live update for {} could not be built.", matchId, error);
+            }
+        }
+        publish(matchId);
+    }
+
+    /** Stops fast pushes until the next full view confirms the match is public again. */
+    public void recheckVisibility(UUID matchId) { visible.remove(matchId); }
+
     public int watching(UUID matchId) {
         var set = watchers.get(matchId);
         return set == null ? 0 : set.size();
@@ -113,8 +137,11 @@ public class LiveMatchHub implements ServletContextAware, DisposableBean {
 
     private String message(UUID matchId) {
         try {
-            return json.writeValueAsString(Map.of("type", "view", "view", matches.read(matchId)));
+            String text = json.writeValueAsString(Map.of("type", "view", "view", matches.read(matchId)));
+            if (watchers.containsKey(matchId)) visible.put(matchId, true);
+            return text;
         } catch (AuthFailure notPublic) {
+            visible.remove(matchId);
             return "{\"type\":\"unavailable\"}";
         } catch (Exception error) {
             log.warn("Live view for {} could not be built.", matchId, error);

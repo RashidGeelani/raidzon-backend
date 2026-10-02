@@ -63,4 +63,24 @@ class HalfClockRulesetTest {
         state = engine.apply(state, MatchAction.Lifecycle.SECOND_HALF, 400_000).state();
         assertEquals(400_000L, state.clock().startedAt());
     }
+
+    /** The server applies taps to the stored projection; it must match a full replay exactly. */
+    @Test void steppingTheProjectionMatchesReplayingTheHistory() {
+        for (String ruleset : List.of(MatchEngine.RULESET_VERSION, MatchEngine.V4)) {
+            var history = MatchHistory.fromSnapshot(setup(ruleset).initialState());
+            var state = history.state();
+            long now = 5_000;
+            for (int i = 0; i < 12; i++) {
+                String raiderId = raider(history.state());
+                MatchAction action = i % 2 == 0 ? new MatchAction.StartRaid(raiderId)
+                    : new MatchAction.Raid(raiderId, "EMPTY", List.of(), List.of(), null, false);
+                var input = new MatchHistory.Input("e" + i, history.version(), ruleset, now += 7_000, action);
+                var step = MatchHistory.step(state, history.version(), input);
+                history = history.append(input);
+                assertEquals(history.events().getLast(), step);
+                state = step.result().state();
+            }
+            assertEquals(history.rebuild().state(), state);
+        }
+    }
 }

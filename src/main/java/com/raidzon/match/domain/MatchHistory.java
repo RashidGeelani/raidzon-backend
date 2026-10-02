@@ -62,6 +62,18 @@ public final class MatchHistory {
         return new MatchHistory(initial, transition.state(), next);
     }
 
+    /**
+     * Applies one non-undo input to a trusted projection without replaying earlier events, so the
+     * cost of recording a tap does not grow with the length of the match. Same rules as {@link #append}.
+     */
+    public static Event step(MatchState state, int version, Input input) {
+        Objects.requireNonNull(input, "input");
+        require(!(input.action() instanceof MatchAction.Undo), "Undo needs the full history.");
+        require(input.baseVersion() == version, "Event version does not match current history.");
+        var before = state.settleClocks(input.occurredAt());
+        return new Event(input, version + 1, before, new MatchEngine(input.rulesetVersion()).apply(before, input.action(), input.occurredAt()));
+    }
+
     /** Re-evaluates recorded facts. Never accepts client-supplied score snapshots as truth. */
     public static MatchHistory replay(MatchState initial, List<Input> inputs) {
         var history = fromSnapshot(initial);

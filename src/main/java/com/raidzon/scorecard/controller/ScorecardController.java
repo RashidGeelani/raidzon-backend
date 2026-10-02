@@ -13,7 +13,7 @@ public class ScorecardController {
     public record PublishInput(boolean published) {}
     public record ShareLink(UUID shareId,boolean published) {}
     @PostMapping("/matches/{id}/scorecard") public ShareLink publish(@PathVariable UUID id,@RequestBody PublishInput input,@RequestAttribute("identity") AuthIdentity actor){
-        var link=new ShareLink(scorecards.publish(id,actor,input.published()),input.published());live.publish(id);return link;
+        live.recheckVisibility(id);var link=new ShareLink(scorecards.publish(id,actor,input.published()),input.published());live.publish(id);return link;
     }
     @GetMapping("/public/scorecards/{shareId}") public PublicScorecard read(@PathVariable UUID shareId){return scorecards.read(shareId);}
 }

@@ -122,12 +122,24 @@ public final class AuthService {
         require(result!=null,401,"INVALID_CODE","Code invalid, expired, or already used.");
         return result;
     }
+    /** Verified tokens are reused for a few seconds so a burst of scoring taps skips the lookup. */
+    private static final long TOKEN_CACHE_MS=20_000;
+    private record CachedIdentity(AuthIdentity identity,long until){}
+    private final java.util.concurrent.ConcurrentHashMap<String,CachedIdentity> verified=new java.util.concurrent.ConcurrentHashMap<>();
     public AuthIdentity authenticate(String token) {
         require(token!=null && token.matches("[A-Za-z0-9_-]{43}"),401,"UNAUTHORIZED","Sign in to synchronize matches.");
-        var rows=jdbc.query("SELECT account_id,device_id FROM auth_tokens WHERE token_hash=? AND expires_at>? AND NOT revoked",
-                (rs,index)->new AuthIdentity(rs.getObject(1,UUID.class),rs.getObject(2,UUID.class)),hash(token),clock.millis());
+        String key=hash(token);long now=clock.millis();
+        var cached=verified.get(key);
+        if(cached!=null && cached.until()>now)return cached.identity();
+        var rows=jdbc.query("SELECT account_id,device_id,expires_at FROM auth_tokens WHERE token_hash=? AND expires_at>? AND NOT revoked",
+                (rs,index)->new CachedIdentity(new AuthIdentity(rs.getObject(1,UUID.class),rs.getObject(2,UUID.class)),Math.min(rs.getLong(3),now+TOKEN_CACHE_MS)),key,now);
+        if(rows.isEmpty()){verified.remove(key);}
         require(!rows.isEmpty(),401,"UNAUTHORIZED","Your session expired. Sign in again.");
-        return rows.getFirst();
+        if(verified.size()>10_000)verified.clear();
+        verified.put(key,rows.getFirst());
+        return rows.getFirst().identity();
     }
-    public void logout(String token) { authenticate(token);jdbc.update("UPDATE auth_tokens SET revoked=true WHERE token_hash=?",hash(token)); }
+    /** Forget cached verifications, e.g. after tokens are revoked. */
+    public void forgetVerifiedTokens(){verified.clear();}
+    public void logout(String token) { authenticate(token);verified.remove(hash(token));jdbc.update("UPDATE auth_tokens SET revoked=true WHERE token_hash=?",hash(token)); }
 }

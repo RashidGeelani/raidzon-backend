@@ -49,6 +49,7 @@ public class MatchController {
     }
     @PostMapping("/{matchId}/events") public JsonNode event(@PathVariable UUID matchId,@RequestBody JsonNode body,@RequestAttribute("identity") AuthIdentity actor){
         var request=decode(body,MatchEventRequest.class,"id","baseVersion","rulesetVersion","occurredAt","intent");time(request.occurredAt());
-        var result=matches.append(matchId,request,actor.accountId(),actor.deviceId());if(!result.duplicate())live.publish(matchId);ObjectNode response=json.valueToTree(result);response.set("state",state(result.state()));return response;
+        var result=matches.append(matchId,request,actor.accountId(),actor.deviceId());var state=state(result.state());
+        if(!result.duplicate())live.publish(matchId,result.currentVersion(),state);ObjectNode response=json.valueToTree(result);response.set("state",state);return response;
     }
 }

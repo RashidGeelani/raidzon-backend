@@ -13,6 +13,7 @@ public final class MatchRepository {
     public record StoredMatch(UUID id, UUID owner, UUID scorer, UUID session, String ruleset, String creationFingerprint,
                               MatchState initial, MatchState state, int version) {}
     public record StoredEvent(MatchEventRequest request, String fingerprint, int sequence) {}
+    public record EventRef(UUID eventId, String fingerprint, int sequence, long occurredAt) {}
     private final JdbcTemplate jdbc;
     private final MatchJsonCodec codec;
     public MatchRepository(JdbcTemplate jdbc, MatchJsonCodec codec) { this.jdbc = jdbc; this.codec = codec; }
@@ -35,6 +36,14 @@ public final class MatchRepository {
     public List<StoredEvent> events(UUID id) {
         return jdbc.query("SELECT request, request_fingerprint, sequence FROM match_events WHERE match_id = ? ORDER BY sequence",
                 (rs, row) -> new StoredEvent(codec.read(rs.getString("request"), MatchEventRequest.class), rs.getString("request_fingerprint"), rs.getInt("sequence")), id);
+    }
+    /** The event with this ID (a retry) and the latest event, in one round trip. */
+    public List<EventRef> eventOrLatest(UUID matchId, UUID eventId, int latestSequence) {
+        return jdbc.query("""
+                SELECT event_id, request_fingerprint, sequence, (request->>'occurredAt')::bigint AS occurred_at
+                FROM match_events WHERE match_id = ? AND (event_id = ? OR sequence = ?)
+                """, (rs, row) -> new EventRef(rs.getObject("event_id", UUID.class), rs.getString("request_fingerprint"),
+                        rs.getInt("sequence"), rs.getLong("occurred_at")), matchId, eventId, latestSequence);
     }
     public void append(UUID matchId, MatchEventRequest request, String fingerprint, MatchHistory.Event event) {
         jdbc.update("""
