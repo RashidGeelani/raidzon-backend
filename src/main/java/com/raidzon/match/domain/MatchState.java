@@ -97,6 +97,8 @@ public record MatchState(
     }
 
     public MatchState settleClocks(long now) { return withClocks(clock.settled(now), raidClock.settled(now)); }
+    /** v4 setup: the match clock waits for the first raid. */
+    public MatchState awaitingFirstRaid() { return withClocks(new Clock(clock.remainingMs(), null), raidClock); }
     public MatchState restoreClocks(long now) { return withClocks(clock.restored(now), raidClock.restored(now)); }
     private MatchState withClocks(Clock matchClock, Clock nextRaidClock) {
         return new MatchState(teams, scores, tieScores, pairScores, tieRaids, goldenPair, half, phase, status,

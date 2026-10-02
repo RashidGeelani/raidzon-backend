@@ -18,7 +18,8 @@ import java.util.UUID;
 @RestController @Profile("postgres") @RequestMapping("/api/v1/matches")
 public class MatchController {
     private final MatchService matches; private final GuestClaimService claims; private final ObjectMapper json; private final Clock clock;
-    public MatchController(MatchService matches,GuestClaimService claims,ObjectMapper json,Clock clock){this.matches=matches;this.claims=claims;this.json=json;this.clock=clock;}
+    private final com.raidzon.scorecard.live.LiveMatchHub live;
+    public MatchController(MatchService matches,GuestClaimService claims,ObjectMapper json,Clock clock,com.raidzon.scorecard.live.LiveMatchHub live){this.matches=matches;this.claims=claims;this.json=json;this.clock=clock;this.live=live;}
     private <T> T decode(JsonNode input,Class<T> type,String... fields){
         if(!input.isObject())throw new IllegalArgumentException("Expected a JSON object.");
         var allowed=Set.of(fields);
@@ -43,11 +44,11 @@ public class MatchController {
             ((ObjectNode) body).put("rulesetVersion", com.raidzon.match.domain.MatchEngine.RULESET_VERSION);
         }
         var request=decode(body,CreateMatchRequest.class,"matchId","teams","firstTurn","halfMinutes","raidSeconds","startedAt","rulesetVersion");time(request.startedAt());
-        var result=claims.claim(request,actor);ObjectNode response=json.valueToTree(result);response.set("state",state(result.state()));
+        var result=claims.claim(request,actor);live.publish(request.matchId());ObjectNode response=json.valueToTree(result);response.set("state",state(result.state()));
         return ResponseEntity.status(result.duplicate()?200:201).body(response);
     }
     @PostMapping("/{matchId}/events") public JsonNode event(@PathVariable UUID matchId,@RequestBody JsonNode body,@RequestAttribute("identity") AuthIdentity actor){
         var request=decode(body,MatchEventRequest.class,"id","baseVersion","rulesetVersion","occurredAt","intent");time(request.occurredAt());
-        var result=matches.append(matchId,request,actor.accountId(),actor.deviceId());ObjectNode response=json.valueToTree(result);response.set("state",state(result.state()));return response;
+        var result=matches.append(matchId,request,actor.accountId(),actor.deviceId());if(!result.duplicate())live.publish(matchId);ObjectNode response=json.valueToTree(result);response.set("state",state(result.state()));return response;
     }
 }

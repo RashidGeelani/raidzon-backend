@@ -34,6 +34,7 @@ public record CreateMatchRequest(UUID matchId, List<TeamRoster> teams, int first
             }).toList();
             return new MatchState.Team(team.name(), players, List.of(), 0);
         }).toList();
-        return MatchState.start(rosters, firstTurn, halfMinutes, raidSeconds, startedAt);
+        var state = MatchState.start(rosters, firstTurn, halfMinutes, raidSeconds, startedAt);
+        return com.raidzon.match.domain.MatchEngine.clockStartsWithFirstRaid(resolvedRuleset()) ? state.awaitingFirstRaid() : state;
     }
 }

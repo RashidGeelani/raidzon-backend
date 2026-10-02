@@ -9,6 +9,7 @@ import java.util.UUID;
 @Repository @Profile("postgres")
 public class AccountRepository {
     private record Performance(long raidPoints, long tacklePoints, long superRaids, long superTackles) {}
+    private static final java.time.Duration NAME_CHANGE_INTERVAL = java.time.Duration.ofDays(30);
     private final JdbcTemplate jdbc;
     public AccountRepository(JdbcTemplate jdbc) { this.jdbc = jdbc; }
     @org.springframework.transaction.annotation.Transactional
@@ -19,18 +20,31 @@ public class AccountRepository {
             AND NOT revoked AND expires_at>? AND verified_at BETWEEN ? AND ?
             """, com.raidzon.identity.service.AuthService.hash(verificationToken), identity.accountId(), identity.deviceId(), now, now-300_000, now);
         if (proof != 1) throw new com.raidzon.identity.service.AuthFailure(403,"VERIFICATION_REQUIRED","Verify the same phone again before saving. Verification lasts five minutes.");
-        int updated = jdbc.update("""
-            UPDATE player_profiles SET initial_name=? WHERE claimed_by=?
-            AND phone=(SELECT phone FROM user_accounts WHERE id=?)
-            """, name, identity.accountId(), identity.accountId());
-        if (updated != 1) throw new com.raidzon.identity.service.AuthFailure(404,"PROFILE_NOT_FOUND","No linked player profile was found.");
+        var profiles = jdbc.queryForList("""
+            SELECT id, COALESCE(display_name, initial_name) AS current_name, display_name_changed_at FROM player_profiles
+            WHERE claimed_by=? AND phone=(SELECT phone FROM user_accounts WHERE id=?) FOR UPDATE
+            """, identity.accountId(), identity.accountId());
+        if (profiles.isEmpty()) throw new com.raidzon.identity.service.AuthFailure(404,"PROFILE_NOT_FOUND","No linked player profile was found.");
+        var profile = profiles.getFirst();
+        if (name.equals(profile.get("current_name"))) return;
+        // The player-owned name is shown everywhere, so changes are limited and kept in history.
+        var changedAt = (java.sql.Timestamp) profile.get("display_name_changed_at");
+        if (changedAt != null) {
+            var nextAllowed = changedAt.toInstant().plus(NAME_CHANGE_INTERVAL);
+            if (nextAllowed.isAfter(java.time.Instant.ofEpochMilli(now)))
+                throw new com.raidzon.identity.service.AuthFailure(429,"NAME_CHANGE_LIMIT","You can change your name once every 30 days. Next change allowed on "
+                    + java.time.format.DateTimeFormatter.ISO_LOCAL_DATE.format(nextAllowed.atZone(java.time.ZoneOffset.UTC)) + ".");
+        }
+        jdbc.update("INSERT INTO player_name_history(profile_id,old_name,new_name) VALUES (?,?,?)",
+            profile.get("id"), profile.get("current_name"), name);
+        jdbc.update("UPDATE player_profiles SET display_name=?, display_name_changed_at=now() WHERE id=?", name, profile.get("id"));
     }
     public AccountDashboard dashboard(UUID accountId) {
         String phone = jdbc.queryForObject("SELECT phone FROM user_accounts WHERE id=?", String.class, accountId);
         var profiles = jdbc.query("""
-            SELECT p.id,p.initial_name,count(DISTINCT l.match_id) AS match_count
+            SELECT p.id,COALESCE(p.display_name,p.initial_name) AS initial_name,count(DISTINCT l.match_id) AS match_count
             FROM player_profiles p LEFT JOIN match_player_links l ON l.profile_id=p.id
-            WHERE p.claimed_by=? AND p.phone=? GROUP BY p.id,p.initial_name
+            WHERE p.claimed_by=? AND p.phone=? GROUP BY p.id,p.display_name,p.initial_name
             """, (rs, index) -> new AccountDashboard.PlayerProfile(rs.getObject("id", UUID.class),
                 rs.getString("initial_name"), rs.getLong("match_count"), 0, 0, 0, 0), accountId, phone);
         AccountDashboard.PlayerProfile profile = null;

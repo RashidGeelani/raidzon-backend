@@ -82,7 +82,9 @@ class AuthHttpTest {
         postJson("/tournaments/"+tournament+"/teams",Map.of("id",a,"name","Team 0"),owner,200);
         postJson("/tournaments/"+tournament+"/teams",Map.of("id",UUID.randomUUID(),"name","team 0"),owner,409);
         postJson("/tournaments/"+tournament+"/teams",Map.of("id",b,"name","Team 1"),owner,200);
-        var roster=IntStream.range(0,7).mapToObj(i->Map.of("name","Raider "+i,"phone","+9198765440"+String.format(Locale.ROOT,"%02d",i))).toList();
+        // Rosters hold the same players the match setup uses, so the fixture link passes the roster check.
+        var roster=IntStream.range(0,7).mapToObj(i->Map.of("name","Player 0"+i,"phone","+91987654320"+i)).toList();
+        var rosterB=IntStream.range(0,7).mapToObj(i->Map.of("name","Player 1"+i,"phone","+91987654321"+i)).toList();
         String rosterPath="/tournaments/"+tournament+"/teams/"+a+"/roster";
         var rosterInput=Map.of("players",roster,"expectedRevision",0);
         postJson(rosterPath,rosterInput,other,404);
@@ -91,8 +93,8 @@ class AuthHttpTest {
         var publicResponse=http.perform(get("/api/v1/public/tournaments/"+tournament))
             .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         assertFalse(publicResponse.contains("phone"));
-        assertFalse(publicResponse.contains("+9198765440"));
-        assertTrue(publicResponse.contains("Raider 0"));
+        assertFalse(publicResponse.contains("+9198765432"));
+        assertTrue(publicResponse.contains("Player 00"));
         http.perform(get("/api/v1/public/tournaments").param("search",input.get("name").toString()))
             .andExpect(status().isOk());
         postJson("/tournaments/"+tournament+"/join",Map.of(),null,401);
@@ -122,6 +124,14 @@ class AuthHttpTest {
         postJson("/matches",setup(match),owner,201);
         UUID foreignMatch=UUID.randomUUID();postJson("/matches",setup(foreignMatch),other,201);
         String link="/tournaments/"+tournament+"/fixtures/"+fixture+"/match";
+        postJson(link,Map.of("matchId",match),owner,409); // team B has no roster yet
+        postJson("/tournaments/"+tournament+"/teams/"+b+"/roster",Map.of("players",rosterB,"expectedRevision",0),owner,200);
+        UUID intruder=UUID.randomUUID();var intruderSetup=new HashMap<>(setup(intruder));
+        var intruderTeams=new java.util.ArrayList<Object>((List<?>)intruderSetup.get("teams"));
+        var outsiders=IntStream.range(0,7).mapToObj(i->Map.of("id",UUID.randomUUID(),"name",i==6?"Outsider":"Player 1"+i,"phone",i==6?"+919000000006":"+91987654321"+i)).toList();
+        intruderTeams.set(1,Map.of("name","Team 1","players",outsiders));intruderSetup.put("teams",intruderTeams);
+        postJson("/matches",intruderSetup,owner,201);
+        assertTrue(postJson(link,Map.of("matchId",intruder),owner,409).path("message").asText().contains("Outsider"));
         UUID wrongTimers=UUID.randomUUID();var wrongSetup=new HashMap<>(setup(wrongTimers));wrongSetup.put("halfMinutes",21);
         postJson("/matches",wrongSetup,owner,201);
         postJson(link,Map.of("matchId",wrongTimers),owner,409);
@@ -164,10 +174,10 @@ class AuthHttpTest {
         String proof=editProof(token,System.currentTimeMillis());
         postJson("/account/player-profile",Map.of("name"," ","verificationToken",proof),token,422);
         postJson("/account/player-profile",Map.of("name","Updated Player","verificationToken",proof),token,200);
-        assertEquals("Updated Player",jdbc.queryForObject("SELECT initial_name FROM player_profiles WHERE id=?",String.class,profile));
+        assertEquals("Updated Player",jdbc.queryForObject("SELECT display_name FROM player_profiles WHERE id=?",String.class,profile));
         assertEquals(snapshot,jdbc.queryForObject("SELECT projection::text FROM matches WHERE id=?",String.class,match));
         postJson("/account/player-profile",Map.of("name","Replay","verificationToken",proof),token,403);
-        assertEquals("Updated Player",jdbc.queryForObject("SELECT initial_name FROM player_profiles WHERE id=?",String.class,profile));
+        assertEquals("Updated Player",jdbc.queryForObject("SELECT display_name FROM player_profiles WHERE id=?",String.class,profile));
     }
     Map<String,Object> setup(UUID matchId) {
         var teams=IntStream.range(0,2).mapToObj(side->Map.of("name","Team "+side,"players",IntStream.range(0,7).mapToObj(i->Map.of("id",UUID.randomUUID(),"name","Player "+side+i,"phone","+9198765432"+side+i)).toList())).toList();

@@ -7,6 +7,11 @@ spring:
 server:
   address: ${SERVER_ADDRESS:127.0.0.1}
   port: ${PORT:8080}
+  # Behind Render's proxy every request arrives from the proxy's IP. "native" enables
+  # Tomcat's RemoteIpValve, which reads X-Forwarded-For right-to-left and only trusts
+  # hops from internal proxies, so getRemoteAddr() becomes the real client IP and a
+  # client cannot spoof it by sending its own X-Forwarded-For header.
+  forward-headers-strategy: native
 
 management:
   endpoints:

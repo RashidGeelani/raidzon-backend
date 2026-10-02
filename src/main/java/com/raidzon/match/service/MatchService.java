@@ -47,7 +47,8 @@ public final class MatchService {
                 return new EventAcknowledgement(request.id(), event.sequence(), match.version(), true, match.state());
             }
             if (request.baseVersion() != match.version()) throw new IllegalArgumentException("Event version does not match current history.");
-            if (request.occurredAt() < match.initial().clock().startedAt()) throw new IllegalArgumentException("Event precedes match start.");
+            Long started = match.initial().clock().startedAt(); // null for v4 until the first raid
+            if (started != null && request.occurredAt() < started) throw new IllegalArgumentException("Event precedes match start.");
             var history = replay(match, stored);
             var next = history.append(input);
             repository.append(matchId, request, fingerprint, next.events().getLast());

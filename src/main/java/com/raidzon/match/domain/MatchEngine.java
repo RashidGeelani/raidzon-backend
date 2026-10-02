@@ -12,10 +12,21 @@ import java.util.Objects;
 import static com.raidzon.match.domain.MatchState.*;
 import static com.raidzon.match.domain.ScoreComponent.Kind.*;
 
-/** Deterministic raidzon-v3 transitions. The caller supplies trusted prior state and logical time. */
+/**
+ * Deterministic transitions. The caller supplies trusted prior state and logical time.
+ * raidzon-v4 = v3 rules, but each half's match clock starts with that half's first raid.
+ */
 public final class MatchEngine {
+    /** Default for requests that omit a ruleset (older clients). New app matches send raidzon-v4. */
     public static final String RULESET_VERSION = "raidzon-v3";
-    public static boolean supports(String version) { return "raidzon-v2".equals(version) || RULESET_VERSION.equals(version); }
+    public static final String V4 = "raidzon-v4";
+    public static boolean supports(String version) { return "raidzon-v2".equals(version) || RULESET_VERSION.equals(version) || V4.equals(version); }
+    /** v4 starts each half's clock with its first raid instead of at setup / half-time. */
+    public static boolean clockStartsWithFirstRaid(String version) { return V4.equals(version); }
+    /** The half clock has not run yet this half (full time left and stopped). */
+    static boolean halfClockPending(MatchDraft state) {
+        return state.clock.startedAt() == null && state.clock.remainingMs() == state.halfMinutes * 60_000L;
+    }
     private final String rulesetVersion;
     public MatchEngine() { this(RULESET_VERSION); }
     public MatchEngine(String version) {
@@ -89,6 +100,8 @@ public final class MatchEngine {
         }
         state.player(state.turn, action.raiderId(), PlayerStatus.ACTIVE);
         state.currentRaiderId = action.raiderId();
+        if (clockStartsWithFirstRaid(rulesetVersion) && state.phase == Phase.REGULATION && halfClockPending(state))
+            state.clock = new Clock(state.clock.remainingMs(), now);
         state.raidClock = new Clock(state.raidSeconds * 1000L, now); state.expiryReviewed = false;
         return "Raid " + state.raidNumber + " started";
     }
@@ -125,7 +138,7 @@ public final class MatchEngine {
         outs.forEach(id -> state.out(defend, id));
         if (action.outcome().equals("TACKLE") || action.outcome().equals("SELF_OUT")) state.out(attack, raider.id());
         // A defender self-out cannot rescue a team whose last raider was tackled.
-        boolean lastRaiderTackled = rulesetVersion.equals(RULESET_VERSION) && action.outcome().equals("TACKLE")
+        boolean lastRaiderTackled = !rulesetVersion.equals("raidzon-v2") && action.outcome().equals("TACKLE")
                 && !action.selfOutDefenderIds().isEmpty() && state.activeCount(attack) == 0;
         if (!lastRaiderTackled) state.revive(attack, result.attackingRevivals());
         state.revive(defend, result.defendingRevivals());
@@ -173,7 +186,8 @@ public final class MatchEngine {
             case RESUME -> {
                 require(state.status == Status.PAUSED, "The match is not paused.");
                 state.status = Status.LIVE;
-                state.clock = new Clock(state.clock.remainingMs(), state.phase == Phase.REGULATION ? now : null);
+                boolean waitForFirstRaid = clockStartsWithFirstRaid(rulesetVersion) && halfClockPending(state);
+                state.clock = new Clock(state.clock.remainingMs(), state.phase == Phase.REGULATION && !waitForFirstRaid ? now : null);
                 if (state.currentRaiderId != null) state.raidClock = new Clock(state.raidClock.remainingMs(), now);
             }
             case END_HALF -> {
@@ -185,7 +199,7 @@ public final class MatchEngine {
                 require(state.status == Status.HALF_TIME, "End the first half first.");
                 state.half = 2; state.turn = 1 - state.firstTurn; state.status = Status.LIVE;
                 state.substitutions.replaceAll(ignored -> 0);
-                state.clock = new Clock(state.halfMinutes * 60_000L, now);
+                state.clock = new Clock(state.halfMinutes * 60_000L, clockStartsWithFirstRaid(rulesetVersion) ? null : now);
             }
             case END_MATCH -> {
                 require(state.currentRaiderId == null, "Finish the raid before ending the match.");

@@ -11,7 +11,8 @@ import java.util.UUID;
 @Service @Profile("postgres")
 public class TournamentService {
     private final TournamentRepository repository;
-    public TournamentService(TournamentRepository repository){this.repository=repository;}
+    private final com.raidzon.team.repository.TeamRepository teams;
+    public TournamentService(TournamentRepository repository,com.raidzon.team.repository.TeamRepository teams){this.repository=repository;this.teams=teams;}
     public List<Tournament> list(UUID owner){return repository.list(owner);}
     public List<Tournament> browse(String search) {
         String query=search.trim();
@@ -38,8 +39,8 @@ public class TournamentService {
     }
     @Transactional public Tournament.Detail roster(UUID id,UUID team,Tournament.RosterInput input,UUID owner){
         repository.owned(id,owner,true);
-        if(input.players()==null || (!input.players().isEmpty() && (input.players().size()<7 || input.players().size()>12)) || input.expectedRevision()<0)
-            throw new IllegalArgumentException("Save seven starters and up to five substitutes, or clear the roster.");
+        if(input.players()==null || (!input.players().isEmpty() && (input.players().size()<Tournament.MIN_ROSTER || input.players().size()>Tournament.MAX_ROSTER)) || input.expectedRevision()<0)
+            throw new IllegalArgumentException("Save a squad of 7 to 20 players, or clear the roster.");
         var players=input.players().stream().map(player->{
             if(player==null)throw new IllegalArgumentException("Enter each roster player.");
             var phone=player.phone();
@@ -48,6 +49,7 @@ public class TournamentService {
         }).toList();
         if(players.stream().map(Tournament.RosterPlayer::phone).distinct().count()!=players.size())
             throw new IllegalArgumentException("Each player needs a unique phone number.");
+        onlyOneTeam(id,team,players);
         repository.roster(id,team,new Tournament.RosterInput(players,input.expectedRevision()));return detail(id,owner);
     }
     @Transactional public Tournament.Detail fixture(UUID id,Tournament.FixtureInput input,UUID owner){
@@ -63,6 +65,37 @@ public class TournamentService {
         if(input.expectedRevision()<0)throw new IllegalArgumentException("Invalid fixture revision.");
         var normalized=new Tournament.ScheduleInput(input.scheduledAt()==null?null:input.scheduledAt().truncatedTo(java.time.temporal.ChronoUnit.MICROS),input.expectedRevision());
         repository.reschedule(id,fixture,normalized);return detail(id,owner);
+    }
+    /** Register one of your saved teams (you must own or manage it); its current squad is copied as the roster. */
+    @Transactional public Tournament.Detail registerSavedTeam(UUID id,Tournament.SavedTeamInput input,UUID owner){
+        repository.owned(id,owner,true);required(input.id());required(input.teamId());
+        var squad=savedSquad(input.teamId(),owner);
+        onlyOneTeam(id,input.id(),squad.players());
+        repository.registerSavedTeam(id,input.id(),input.teamId(),squad.name(),squad.players());
+        return detail(id,owner);
+    }
+    /** Re-copy the saved team's current squad into this tournament (e.g. after adding a replacement player). */
+    @Transactional public Tournament.Detail syncSavedTeam(UUID id,UUID team,UUID owner){
+        repository.owned(id,owner,true);
+        var squad=savedSquad(repository.savedTeamOf(id,team),owner);
+        onlyOneTeam(id,team,squad.players());
+        repository.syncSavedRoster(id,team,squad.players());
+        return detail(id,owner);
+    }
+    private com.raidzon.team.repository.TeamRepository.Squad savedSquad(UUID savedTeam,UUID owner){
+        var role=teams.role(savedTeam,owner);
+        if(role==null)throw new com.raidzon.identity.service.AuthFailure(404,"TEAM_NOT_FOUND","Saved team not found.");
+        if(role==com.raidzon.team.dto.Team.Role.COACH)throw new com.raidzon.identity.service.AuthFailure(403,"TEAM_FORBIDDEN","Only the team's owner or manager can register it.");
+        var squad=teams.squad(savedTeam);
+        if(squad.archived())throw new com.raidzon.identity.service.AuthFailure(409,"TEAM_ARCHIVED","This team is archived.");
+        if(squad.players().size()<Tournament.MIN_ROSTER)
+            throw new com.raidzon.identity.service.AuthFailure(409,"SQUAD_TOO_SMALL","Add at least "+Tournament.MIN_ROSTER+" players to the squad before registering.");
+        return squad;
+    }
+    private void onlyOneTeam(UUID tournament,UUID team,List<Tournament.RosterPlayer> players){
+        var clashes=repository.playersOnOtherTeams(tournament,team,players);
+        if(!clashes.isEmpty())throw new com.raidzon.identity.service.AuthFailure(409,"PLAYER_IN_OTHER_TEAM",
+            "A player can play for only one team in a tournament. Already registered: "+String.join(", ",clashes)+".");
     }
     private static void required(UUID id){if(id==null)throw new IllegalArgumentException("An ID is required.");}
     private static String name(String value,int max){if(value==null || value.strip().isEmpty() || value.strip().length()>max || value.codePoints().anyMatch(Character::isISOControl))throw new IllegalArgumentException("Enter a valid name or venue (maximum "+max+" characters).");return value.strip();}

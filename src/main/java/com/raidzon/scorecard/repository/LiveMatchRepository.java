@@ -17,7 +17,9 @@ public class LiveMatchRepository {
     private final ObjectMapper json;
     public LiveMatchRepository(JdbcTemplate jdbc,ObjectMapper json){this.jdbc=jdbc;this.json=json;}
     private JsonNode parse(String value){try{return json.readTree(value);}catch(Exception error){throw new IllegalStateException("Unable to read match view.",error);}}
-    public static ObjectNode publicState(JsonNode source,ObjectMapper json){
+    public static ObjectNode publicState(JsonNode source,ObjectMapper json){return publicState(source,json,java.util.Map.of());}
+    /** ownNames maps match-local player IDs to the player's own profile name, which replaces the stored roster name. */
+    public static ObjectNode publicState(JsonNode source,ObjectMapper json,java.util.Map<String,String> ownNames){
         var target=json.createObjectNode();
         for(String field:new String[]{"scores","tieScores","status","phase","half","raidNumber","turn","currentRaiderId","clock","raidClock","winner","tieBreakerRaiders","tieRaids"})
             target.set(field,source.path(field));
@@ -28,6 +30,8 @@ public class LiveMatchRepository {
             for(var player:team.path("players")){
                 var p=players.addObject();
                 for(String field:new String[]{"id","name","status","raidPoints","tacklePoints"})p.set(field,player.path(field));
+                var ownName=ownNames.get(player.path("id").asText());
+                if(ownName!=null)p.put("name",ownName);
             }
         }
         return target;
@@ -48,7 +52,12 @@ public class LiveMatchRepository {
                 AND u.request #>> '{intent,targetEventId}'=e.event_id::text)
             ORDER BY e.sequence DESC LIMIT 30
             """,(r,i)->new LiveMatchView.Event(r.getObject("event_id",UUID.class),r.getString("type"),r.getString("summary"),r.getInt("raid"),parse(r.getString("components"))),id);
-        return new LiveMatchView(id,publicState(parse(row.get("projection").toString()),json),events,
+        var ownNames=new java.util.HashMap<String,String>();
+        jdbc.query("""
+            SELECT l.local_player_id::text AS player_id,p.display_name FROM match_player_links l
+            JOIN player_profiles p ON p.id=l.profile_id WHERE l.match_id=? AND p.display_name IS NOT NULL
+            """,(org.springframework.jdbc.core.RowCallbackHandler) r->ownNames.put(r.getString("player_id"),r.getString("display_name")),id);
+        return new LiveMatchView(id,publicState(parse(row.get("projection").toString()),json,ownNames),events,
             ((Number)row.get("version")).intValue(),System.currentTimeMillis(),((java.sql.Timestamp)row.get("updated_at")).getTime());
     }
 }

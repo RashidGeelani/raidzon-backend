@@ -24,7 +24,7 @@ public class TournamentRepository {
     public List<Tournament.PlayerRanking> leaderboard(UUID tournamentId,String category){
         String order=switch(category){case "raid"->"raid_points";case "tackle"->"tackle_points";default->"total_points";};
         return jdbc.query("""
-            SELECT p.id,p.initial_name,count(DISTINCT m.id) AS played,
+            SELECT p.id,COALESCE(p.display_name,p.initial_name) AS initial_name,count(DISTINCT m.id) AS played,
                 COALESCE(sum((player.value->>'raidPoints')::bigint),0) AS raid_points,
                 COALESCE(sum((player.value->>'tacklePoints')::bigint),0) AS tackle_points,
                 COALESCE(sum((player.value->>'raidPoints')::bigint + (player.value->>'tacklePoints')::bigint),0) AS total_points
@@ -33,16 +33,22 @@ public class TournamentRepository {
             CROSS JOIN LATERAL jsonb_array_elements(team.value->'players') AS player(value)
             WHERE player.value->>'id'=l.local_player_id::text AND m.projection->>'status'='COMPLETED'
                 AND EXISTS(SELECT 1 FROM tournament_fixtures f WHERE f.match_id=m.id AND (?::uuid IS NULL OR f.tournament_id=?))
-            GROUP BY p.id,p.initial_name ORDER BY
-            """+order+" DESC,p.initial_name,p.id LIMIT 100",
+            GROUP BY p.id,p.display_name,p.initial_name ORDER BY
+            """+order+" DESC,2,p.id LIMIT 100",
             (r,i)->new Tournament.PlayerRanking(r.getObject("id",UUID.class),r.getString("initial_name"),r.getLong("played"),r.getLong("raid_points"),r.getLong("tackle_points")),tournamentId,tournamentId);
     }
     public Tournament.PublicDetail publicDetail(UUID id) {
         var owners=jdbc.queryForList("SELECT owner_account_id FROM tournaments WHERE id=?",UUID.class,id);
         if(owners.isEmpty()) throw new AuthFailure(404,"TOURNAMENT_NOT_FOUND","Tournament not found.");
         var detail=detail(id,owners.getFirst());
+        // A player's own name (set after verifying their phone) replaces the organizer's roster entry.
+        var ownNames=new java.util.HashMap<String,String>();
+        jdbc.query("""
+            SELECT r.phone,p.display_name FROM tournament_roster_players r JOIN player_profiles p ON p.phone=r.phone
+            WHERE r.tournament_id=? AND p.display_name IS NOT NULL
+            """,(org.springframework.jdbc.core.RowCallbackHandler) r->ownNames.put(r.getString("phone"),r.getString("display_name")),id);
         return new Tournament.PublicDetail(detail.tournament(),detail.teams().stream().map(team ->
-            new Tournament.PublicTeam(team.id(),team.name(),team.roster().stream().map(Tournament.RosterPlayer::name).toList())).toList(),detail.fixtures(),detail.standings());
+            new Tournament.PublicTeam(team.id(),team.name(),team.roster().stream().map(player->ownNames.getOrDefault(player.phone(),player.name())).toList())).toList(),detail.fixtures(),detail.standings(),detail.registrationOpen());
     }
     public List<UUID> joined(UUID account) {
         return jdbc.queryForList("SELECT tournament_id FROM tournament_followers WHERE account_id=? ORDER BY joined_at DESC",UUID.class,account);
@@ -67,10 +73,10 @@ public class TournamentRepository {
     }
     public Tournament.Detail detail(UUID id, UUID owner) {
         var tournament=owned(id,owner,false);
-        var teams=jdbc.query("SELECT id,name,roster_revision FROM tournament_teams WHERE tournament_id=? ORDER BY name,id",(r,i)->{
+        var teams=jdbc.query("SELECT id,name,roster_revision,team_id FROM tournament_teams WHERE tournament_id=? ORDER BY name,id",(r,i)->{
             var teamId=r.getObject("id",UUID.class);
             var roster=jdbc.query("SELECT name,phone FROM tournament_roster_players WHERE team_id=? ORDER BY position",(player,index)->new Tournament.RosterPlayer(player.getString("name"),player.getString("phone")),teamId);
-            return new Tournament.Team(teamId,r.getString("name"),r.getInt("roster_revision"),roster);
+            return new Tournament.Team(teamId,r.getString("name"),r.getInt("roster_revision"),roster,r.getObject("team_id",UUID.class));
         },id);
         var fixtures=jdbc.query("""
             SELECT f.*,m.projection->>'status' AS status,(m.projection #>> '{scores,0}')::integer AS score_a,
@@ -82,7 +88,8 @@ public class TournamentRepository {
                 r.getTimestamp("scheduled_at")==null?null:r.getTimestamp("scheduled_at").toInstant(),r.getObject("match_id",UUID.class),
                 r.getString("status"),r.getObject("score_a",Integer.class),r.getObject("score_b",Integer.class),r.getString("phase"),
                 r.getObject("tie_a",Integer.class),r.getObject("tie_b",Integer.class),r.getString("winner"),r.getInt("schedule_revision")),id);
-        return new Tournament.Detail(tournament,teams,fixtures,com.raidzon.tournament.service.TournamentStandings.calculate(teams,fixtures));
+        boolean open=Boolean.TRUE.equals(jdbc.queryForObject("SELECT registration_open FROM tournaments WHERE id=?",Boolean.class,id));
+        return new Tournament.Detail(tournament,teams,fixtures,com.raidzon.tournament.service.TournamentStandings.calculate(teams,fixtures),open);
     }
     public void team(UUID id, Tournament.TeamInput team) {
         var existing=jdbc.queryForList("SELECT name FROM tournament_teams WHERE id=? AND tournament_id=?",String.class,team.id(),id);
@@ -107,13 +114,57 @@ public class TournamentRepository {
                 (r,i)->r.getObject("team_id",UUID.class),tournamentId,player.phone(),teamId);
             if(!owner.isEmpty())conflict("This phone number is already on another team in the tournament.");
         }
+        replaceRoster(tournamentId,teamId,input.players());
+    }
+    /** Writes a roster snapshot. Each player is linked to their global profile (created when new). */
+    private void replaceRoster(UUID tournamentId,UUID teamId,List<Tournament.RosterPlayer> players){
         jdbc.update("DELETE FROM tournament_roster_players WHERE team_id=?",teamId);
-        for(int index=0;index<input.players().size();index++){
-            var player=input.players().get(index);
-            jdbc.update("INSERT INTO tournament_roster_players(tournament_id,team_id,position,name,phone) VALUES (?,?,?,?,?)",
-                tournamentId,teamId,index,player.name(),player.phone());
+        for(int index=0;index<players.size();index++){
+            var player=players.get(index);
+            jdbc.update("""
+                INSERT INTO player_profiles(id,phone,initial_name,claimed_by)
+                VALUES (?,?,?,(SELECT id FROM user_accounts WHERE phone=?)) ON CONFLICT(phone) DO NOTHING
+                """,UUID.randomUUID(),player.phone(),player.name(),player.phone());
+            jdbc.update("""
+                INSERT INTO tournament_roster_players(tournament_id,team_id,position,name,phone,profile_id)
+                SELECT ?,?,?,?,?,id FROM player_profiles WHERE phone=?
+                """,tournamentId,teamId,index,player.name(),player.phone(),player.phone());
         }
         jdbc.update("UPDATE tournament_teams SET roster_revision=roster_revision+1 WHERE id=?",teamId);
+    }
+    /** Players already registered to a different team in this tournament (one team per player per tournament). */
+    public List<String> playersOnOtherTeams(UUID tournamentId,UUID teamId,List<Tournament.RosterPlayer> players){
+        if(players.isEmpty())return List.of();
+        var phones=players.stream().map(Tournament.RosterPlayer::phone).toArray(String[]::new);
+        return jdbc.queryForList("""
+            SELECT r.name||' ('||t.name||')' FROM tournament_roster_players r JOIN tournament_teams t ON t.id=r.team_id
+            WHERE r.tournament_id=? AND r.team_id<>? AND r.phone = ANY(?) ORDER BY r.name
+            """,String.class,tournamentId,teamId,phones);
+    }
+    /** Creates (or, on retry, confirms) a tournament team registered from a saved team, then copies its squad. */
+    public void registerSavedTeam(UUID tournamentId,UUID id,UUID savedTeamId,String name,List<Tournament.RosterPlayer> players){
+        var existing=jdbc.queryForList("SELECT team_id FROM tournament_teams WHERE id=? AND tournament_id=?",id,tournamentId);
+        if(!existing.isEmpty()){
+            if(!savedTeamId.equals(existing.getFirst().get("team_id")))conflict("Team ID was reused.");
+            return;
+        }
+        if(jdbc.queryForObject("SELECT count(*) FROM tournament_teams WHERE tournament_id=? AND team_id=?",Integer.class,tournamentId,savedTeamId)>0)
+            conflict("This team is already registered in the tournament.");
+        team(tournamentId,new Tournament.TeamInput(id,name));
+        jdbc.update("UPDATE tournament_teams SET team_id=? WHERE id=?",savedTeamId,id);
+        replaceRoster(tournamentId,id,players);
+    }
+    public UUID savedTeamOf(UUID tournamentId,UUID teamId){
+        var rows=jdbc.queryForList("SELECT team_id FROM tournament_teams WHERE id=? AND tournament_id=? FOR UPDATE",teamId,tournamentId);
+        if(rows.isEmpty())throw new AuthFailure(404,"TEAM_NOT_FOUND","Team not found.");
+        var saved=(UUID)rows.getFirst().get("team_id");
+        if(saved==null)conflict("This team was not registered from a saved team.");
+        return saved;
+    }
+    public void syncSavedRoster(UUID tournamentId,UUID teamId,List<Tournament.RosterPlayer> players){
+        var current=jdbc.query("SELECT name,phone FROM tournament_roster_players WHERE team_id=? ORDER BY position",
+            (r,i)->new Tournament.RosterPlayer(r.getString("name"),r.getString("phone")),teamId);
+        if(!current.equals(players))replaceRoster(tournamentId,teamId,players);
     }
     public void fixture(UUID id, Tournament.FixtureInput fixture) {
         if(jdbc.queryForObject("SELECT count(*) FROM tournament_teams WHERE tournament_id=? AND id IN (?,?)",Integer.class,id,fixture.teamAId(),fixture.teamBId())!=2)
@@ -141,6 +192,19 @@ public class TournamentRepository {
             AND (m.projection->>'halfMinutes')::integer=t.half_minutes AND (m.projection->>'raidSeconds')::integer=t.raid_seconds
             """,Integer.class,id,match,row.get("team_a"),row.get("team_b"));
         if(valid!=1)conflict("Team order, names and match timers must match the tournament fixture.");
+        // One team per player per tournament: every match player must be on their fixture team's roster.
+        var fixtureTeams=jdbc.queryForMap("SELECT team_a_id,team_b_id FROM tournament_fixtures WHERE id=?",fixture);
+        for(int side=0;side<2;side++){
+            UUID team=(UUID)fixtureTeams.get(side==0?"team_a_id":"team_b_id");
+            if(jdbc.queryForObject("SELECT count(*) FROM tournament_roster_players WHERE team_id=?",Integer.class,team)<Tournament.MIN_ROSTER)
+                conflict("Save both teams' rosters before linking a match to this fixture.");
+            var outsiders=jdbc.queryForList("""
+                SELECT player->>'name' FROM matches m CROSS JOIN LATERAL jsonb_array_elements(m.projection->'teams'->?->'players') AS player
+                WHERE m.id=? AND NOT EXISTS (SELECT 1 FROM tournament_roster_players r WHERE r.team_id=? AND r.phone=player->>'phone')
+                ORDER BY 1
+                """,String.class,side,match,team);
+            if(!outsiders.isEmpty())conflict("Only registered players can play this fixture. Not on the "+(side==0?row.get("team_a"):row.get("team_b"))+" roster: "+String.join(", ",outsiders)+".");
+        }
         if(jdbc.queryForObject("SELECT count(*) FROM tournament_fixtures WHERE match_id=?",Integer.class,match)>0)conflict("This match is already linked to a fixture.");
         jdbc.update("UPDATE tournament_fixtures SET match_id=? WHERE id=?",match,fixture);
     }
