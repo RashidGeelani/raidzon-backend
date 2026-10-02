@@ -58,7 +58,62 @@ public class TournamentService {
         repository.fixture(id,normalized);return detail(id,owner);
     }
     @Transactional public Tournament.Detail link(UUID id,UUID fixture,Tournament.LinkInput input,UUID owner){
-        repository.owned(id,owner,true);required(input.matchId());repository.link(id,fixture,input.matchId(),owner);return detail(id,owner);
+        repository.owned(id,owner,true);required(input.matchId());
+        // Knockout fixtures get their teams when earlier results decide them.
+        var planned=repository.detail(id,owner).fixtures().stream().filter(f->f.id().equals(fixture)).findFirst().orElse(null);
+        if(planned!=null && planned.matchId()==null){
+            if(planned.teamAId()==null || planned.teamBId()==null)
+                throw new com.raidzon.identity.service.AuthFailure(409,"TEAMS_NOT_DECIDED","Both teams for this match are not decided yet.");
+            repository.fillTeams(id,fixture,planned.teamAId(),planned.teamBId());
+        }
+        repository.link(id,fixture,input.matchId(),owner);return detail(id,owner);
+    }
+    /** Format can change only until the first match is played in a fixture. Changing it clears unplayed fixtures. */
+    @Transactional public Tournament.Detail setFormat(UUID id,Tournament.FormatInput input,UUID owner){
+        repository.owned(id,owner,true);
+        String problem=com.raidzon.tournament.service.TournamentFormats.validate(input);
+        if(problem!=null)throw new IllegalArgumentException(problem);
+        var normalized="GROUPS_KNOCKOUT".equals(input.type()) ? input
+            : new Tournament.FormatInput(input.type(),1,2,"KNOCKOUT".equals(input.type()) && input.thirdPlace());
+        if(normalized.equals(repository.format(id)))return detail(id,owner);
+        notLocked(id);
+        repository.setFormat(id,normalized);return detail(id,owner);
+    }
+    @Transactional public Tournament.Detail arrange(UUID id,Tournament.ArrangementInput input,UUID owner){
+        repository.owned(id,owner,true);notLocked(id);
+        repository.arrange(id,input,"GROUPS_KNOCKOUT".equals(repository.format(id).type()));return detail(id,owner);
+    }
+    /** Replaces unplayed fixtures: round robin for a league, the bracket for knockout, group games plus bracket for groups. */
+    @Transactional public Tournament.Detail generate(UUID id,UUID owner){
+        repository.owned(id,owner,true);notLocked(id);
+        var format=repository.format(id);
+        var groups=repository.groups(id);
+        var plan=new java.util.ArrayList<com.raidzon.tournament.service.TournamentFormats.Planned>();
+        switch(format.type()){
+            case "LEAGUE" -> {
+                var teams=groups.getFirst().teamIds();
+                if(teams.size()<2)throw new IllegalArgumentException("Add at least 2 teams first.");
+                plan.addAll(TournamentFormats.roundRobin(teams,"LEAGUE",null));
+            }
+            case "KNOCKOUT" -> {
+                var teams=groups.getFirst().teamIds();
+                if(teams.size()<2)throw new IllegalArgumentException("Add at least 2 teams first.");
+                plan.addAll(TournamentFormats.knockout(TournamentFormats.seededPairs(teams.stream().map(TournamentFormats::team).toList()),format.thirdPlace()));
+            }
+            default -> {
+                int needed=Math.max(2,format.advancePerGroup());
+                for(var group:groups){
+                    if(group.teamIds().size()<needed)
+                        throw new IllegalArgumentException("Group "+group.name()+" needs at least "+needed+" teams.");
+                    plan.addAll(TournamentFormats.roundRobin(group.teamIds(),"GROUP",group.id()));
+                }
+                plan.addAll(TournamentFormats.knockout(TournamentFormats.groupPairs(groups.stream().map(Tournament.Group::id).toList(),format.advancePerGroup()),format.thirdPlace()));
+            }
+        }
+        repository.replaceFixtures(id,plan);return detail(id,owner);
+    }
+    private void notLocked(UUID id){
+        if(repository.locked(id))throw new com.raidzon.identity.service.AuthFailure(409,"FORMAT_LOCKED","The format is locked because a match has been played. Fixtures can no longer be regenerated.");
     }
     @Transactional public Tournament.Detail reschedule(UUID id,UUID fixture,Tournament.ScheduleInput input,UUID owner){
         repository.owned(id,owner,true);

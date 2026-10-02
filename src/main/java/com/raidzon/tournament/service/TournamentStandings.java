@@ -7,7 +7,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.UUID;
 
-/** League table from completed, server-linked fixtures. Tied rows share a rank. */
+/**
+ * League or group table from completed, server-linked fixtures. Order: table points, then point
+ * difference, then scoring ratio (points for / points against). Fully tied rows share a rank.
+ */
 public final class TournamentStandings {
     private TournamentStandings() {}
     private static final class Count {
@@ -19,10 +22,15 @@ public final class TournamentStandings {
             switch(result){case "WIN" -> {won++;tablePoints+=3;} case "DRAW" -> {drawn++;tablePoints++;} default -> lost++;}
         }
         int difference(){return pointsFor-pointsAgainst;}
-        Tournament.Standing row(int rank){return new Tournament.Standing(id,name,rank,played,won,drawn,lost,tablePoints,pointsFor,pointsAgainst,difference());}
+        double ratio(){return pointsAgainst==0?(pointsFor>0?Double.MAX_VALUE:0):(double)pointsFor/pointsAgainst;}
+        Tournament.Standing row(int rank,UUID group,boolean qualifies){return new Tournament.Standing(id,name,rank,played,won,drawn,lost,tablePoints,pointsFor,pointsAgainst,difference(),group,qualifies);}
     }
     public static List<Tournament.Standing> calculate(List<Tournament.Team> teams,List<Tournament.Fixture> fixtures){
-        var counts=new HashMap<UUID,Count>();
+        return calculate(teams,fixtures.stream().filter(f->!f.knockout()).toList(),null,0);
+    }
+    /** One group's table (group null = whole league). The top {@code advance} rows are marked as qualifying. */
+    public static List<Tournament.Standing> calculate(List<Tournament.Team> teams,List<Tournament.Fixture> fixtures,UUID group,int advance){
+        var counts=new java.util.LinkedHashMap<UUID,Count>();
         for(var team:teams)counts.put(team.id(),new Count(team.id(),team.name()));
         for(var fixture:fixtures){
             if(fixture.matchId()==null || !"COMPLETED".equals(fixture.status()) || fixture.scoreA()==null || fixture.scoreB()==null || fixture.winner()==null)continue;
@@ -34,13 +42,15 @@ public final class TournamentStandings {
         var sorted=new ArrayList<>(counts.values());
         sorted.sort(Comparator.comparingInt((Count value)->value.tablePoints).reversed()
             .thenComparing(Comparator.comparingInt(Count::difference).reversed())
+            .thenComparing(Comparator.comparingDouble(Count::ratio).reversed())
             .thenComparing(value->value.name,String.CASE_INSENSITIVE_ORDER).thenComparing(value->value.id));
         var result=new ArrayList<Tournament.Standing>();
         for(int i=0;i<sorted.size();i++){
             var current=sorted.get(i);
-            int rank=i>0 && current.tablePoints==sorted.get(i-1).tablePoints && current.difference()==sorted.get(i-1).difference()
-                ? result.get(i-1).rank():i+1;
-            result.add(current.row(rank));
+            var previous=i>0?sorted.get(i-1):null;
+            int rank=previous!=null && current.tablePoints==previous.tablePoints && current.difference()==previous.difference()
+                && Double.compare(current.ratio(),previous.ratio())==0 ? result.get(i-1).rank():i+1;
+            result.add(current.row(rank,group,i<advance));
         }
         return result;
     }
