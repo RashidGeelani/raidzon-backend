@@ -8,6 +8,7 @@ import java.util.Map;
 
 @RestControllerAdvice @Profile("postgres")
 public class ApiErrors {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ApiErrors.class);
     @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
     ResponseEntity<?> missing(){return response(404,"NOT_FOUND","Route not found.");}
     @ExceptionHandler(AuthFailure.class) ResponseEntity<?> auth(AuthFailure error){return response(error.status(),error.code(),error.getMessage());}
@@ -21,6 +22,11 @@ public class ApiErrors {
     }
     @ExceptionHandler(org.springframework.http.converter.HttpMessageNotReadableException.class)
     ResponseEntity<?> malformed(){return response(400,"INVALID_JSON","Request body is invalid.");}
-    @ExceptionHandler(Exception.class) ResponseEntity<?> unexpected(){return response(500,"SERVER_ERROR","The request could not be completed. Your local history is safe.");}
+    /** Unexpected failures are logged with a short reference that is also returned to the app. */
+    @ExceptionHandler(Exception.class) ResponseEntity<?> unexpected(Exception error, jakarta.servlet.http.HttpServletRequest request){
+        String reference=java.util.UUID.randomUUID().toString().substring(0,8);
+        log.error("Unhandled error {} on {} {}",reference,request.getMethod(),request.getRequestURI(),error);
+        return ResponseEntity.status(500).body(Map.of("code","SERVER_ERROR","message","The request could not be completed. Your local history is safe.","reference",reference));
+    }
     private ResponseEntity<?> response(int status,String code,String message){return ResponseEntity.status(status).body(Map.of("code",code,"message",message));}
 }

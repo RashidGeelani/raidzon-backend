@@ -8,7 +8,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-@SpringBootTest
+// application.yml activates the postgres profile for deployments; this smoke test runs without a database.
+@SpringBootTest(properties = "spring.profiles.active=default")
 @AutoConfigureMockMvc
 class ApplicationTest {
     @Autowired private MockMvc client;

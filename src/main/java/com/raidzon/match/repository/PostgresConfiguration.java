@@ -33,6 +33,10 @@ public class PostgresConfiguration {
         config.setValidationTimeout(5_000);
         config.setIdleTimeout(60_000);
         config.setMaxLifetime(300_000);
+        // Supabase's transaction pooler (port 6543) hands each transaction a different server
+        // connection, so server-side prepared statements break ("prepared statement S_1 already
+        // exists"). Disabling them is safe on a direct connection too.
+        config.addDataSourceProperty("prepareThreshold", "0");
         return new HikariDataSource(config);
     }
     @Bean(initMethod = "migrate") Flyway flyway(HikariDataSource dataSource) {
