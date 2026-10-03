@@ -291,12 +291,20 @@ public class TournamentRepository {
         if(row.get("match_id")!=null){if(!row.get("match_id").equals(match))conflict("This fixture already has a match.");return;}
         var matches=jdbc.queryForList("SELECT projection FROM matches WHERE id=? AND owner_account_id=? FOR UPDATE",match,owner);
         if(matches.isEmpty())throw new AuthFailure(404,"MATCH_NOT_FOUND","Sync a match owned by this account first.");
-        int valid=jdbc.queryForObject("""
-            SELECT count(*) FROM matches m JOIN tournaments t ON t.id=? WHERE m.id=?
-            AND m.projection #>> '{teams,0,name}'=? AND m.projection #>> '{teams,1,name}'=?
-            AND (m.projection->>'halfMinutes')::integer=t.half_minutes AND (m.projection->>'raidSeconds')::integer=t.raid_seconds
-            """,Integer.class,id,match,row.get("team_a"),row.get("team_b"));
-        if(valid!=1)conflict("Team order, names and match timers must match the tournament fixture.");
+        // Say exactly what differs, so the scorer can fix it instead of guessing.
+        var found=jdbc.queryForMap("""
+            SELECT m.projection #>> '{teams,0,name}' AS match_a, m.projection #>> '{teams,1,name}' AS match_b,
+                (m.projection->>'halfMinutes')::integer AS match_half, (m.projection->>'raidSeconds')::integer AS match_raid,
+                t.half_minutes, t.raid_seconds
+            FROM matches m JOIN tournaments t ON t.id=? WHERE m.id=?
+            """,id,match);
+        String teamA=(String)row.get("team_a"), teamB=(String)row.get("team_b");
+        String matchA=String.valueOf(found.get("match_a")).trim(), matchB=String.valueOf(found.get("match_b")).trim();
+        if(matchA.equalsIgnoreCase(teamB.trim())&&matchB.equalsIgnoreCase(teamA.trim()))
+            conflict("Teams are the wrong way round: the fixture is "+teamA+" vs "+teamB+".");
+        if(!matchA.equalsIgnoreCase(teamA.trim())||!matchB.equalsIgnoreCase(teamB.trim()))
+            conflict("Team names must match the fixture: "+teamA+" vs "+teamB+" (this match has "+matchA+" vs "+matchB+").");
+        // Timers are the organizer's default; a scorer may shorten or lengthen halves for a fixture.
         // One team per player per tournament: every match player must be on their fixture team's roster.
         var fixtureTeams=jdbc.queryForMap("SELECT team_a_id,team_b_id FROM tournament_fixtures WHERE id=?",fixture);
         for(int side=0;side<2;side++){
