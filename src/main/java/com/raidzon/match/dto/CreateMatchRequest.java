@@ -27,9 +27,11 @@ public record CreateMatchRequest(UUID matchId, List<TeamRoster> teams, int first
         var rosters = teams.stream().map(team -> {
             var players = java.util.stream.IntStream.range(0, team.players().size()).mapToObj(index -> {
                 var p = team.players().get(index);
-                if (p.id() == null || p.phone() == null || !p.phone().matches("\\+[1-9][0-9]{7,14}"))
-                    throw new IllegalArgumentException("Player IDs and canonical international phone numbers are required.");
-                return new MatchState.Player(p.id().toString(), p.name(), p.phone(),
+                // A phone is optional for a quick match; when given it must be canonical (+<country><number>).
+                var phone = p.phone() == null ? "" : p.phone().trim();
+                if (p.id() == null || (!phone.isEmpty() && !phone.matches("\\+[1-9][0-9]{7,14}")))
+                    throw new IllegalArgumentException("Player IDs are required and phone numbers must be canonical international numbers.");
+                return new MatchState.Player(p.id().toString(), p.name(), phone,
                         index < 7 ? MatchState.PlayerStatus.ACTIVE : MatchState.PlayerStatus.BENCH, 0, 0);
             }).toList();
             return new MatchState.Team(team.name(), players, List.of(), 0);

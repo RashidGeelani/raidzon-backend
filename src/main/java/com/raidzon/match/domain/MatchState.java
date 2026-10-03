@@ -21,7 +21,7 @@ public record MatchState(
                          int raidPoints, int tacklePoints) {
         public Player {
             require(id != null && !id.isBlank() && name != null && !name.isBlank(), "Player identity is required.");
-            require(phone != null && !phone.isBlank(), "Player phone is required.");
+            phone = phone == null ? "" : phone; // optional: players without a phone are match-only
             require(status != null && raidPoints >= 0 && tacklePoints >= 0, "Invalid player state.");
         }
         Player withStatus(PlayerStatus next) { return new Player(id, name, phone, next, raidPoints, tacklePoints); }
@@ -65,7 +65,7 @@ public record MatchState(
         var phones = new HashSet<String>();
         for (var team : teams) for (var player : team.players()) {
             require(ids.add(player.id()), "A player cannot occupy two roster positions.");
-            require(phones.add(player.phone()), "Each player must have a unique phone number across both teams.");
+            require(player.phone().isBlank() || phones.add(player.phone()), "Each player must have a unique phone number across both teams.");
         }
         scores = pair(scores); tieScores = pair(tieScores); pairScores = pair(pairScores); tieRaids = pair(tieRaids);
         require(phase != null && status != null, "Match phase and status are required.");

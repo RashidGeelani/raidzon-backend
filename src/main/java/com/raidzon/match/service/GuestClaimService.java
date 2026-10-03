@@ -14,7 +14,7 @@ public final class GuestClaimService {
     public MatchRegistration claim(CreateMatchRequest request,AuthIdentity actor){
         return tx.execute(status->{
             var result=matches.create(request,actor.accountId(),actor.deviceId());
-            var players=request.teams().stream().flatMap(team->team.players().stream()).sorted(java.util.Comparator.comparing(CreateMatchRequest.Player::phone)).toList();
+            var players=request.teams().stream().flatMap(team->team.players().stream()).filter(player->player.phone()!=null&&!player.phone().isBlank()).sorted(java.util.Comparator.comparing(CreateMatchRequest.Player::phone)).toList();
             for(var player:players){
                 jdbc.update("INSERT INTO player_profiles(id,phone,initial_name,claimed_by) VALUES (?,?,?,(SELECT id FROM user_accounts WHERE phone=?)) ON CONFLICT(phone) DO NOTHING",UUID.randomUUID(),player.phone(),player.name(),player.phone());
                 UUID profile=jdbc.queryForObject("SELECT id FROM player_profiles WHERE phone=?",UUID.class,player.phone());
