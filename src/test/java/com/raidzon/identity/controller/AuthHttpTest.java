@@ -208,6 +208,8 @@ class AuthHttpTest {
         assertEquals(0,playerResponse.path("playerProfile").path("raidPoints").asLong());
         assertEquals(0,playerResponse.path("playerProfile").path("tacklePoints").asLong());
         assertEquals(0,playerResponse.path("playerProfile").path("superRaids").asLong());
+        assertEquals(0,playerResponse.path("playerProfile").path("superTens").asLong());
+        assertEquals(0,playerResponse.path("playerProfile").path("highFives").asLong());
         assertEquals(0,playerResponse.path("playerProfile").path("superTackles").asLong());
         assertEquals(0,playerResponse.path("tournamentCount").asLong());
         assertEquals(0,playerResponse.path("teamCount").asLong());
