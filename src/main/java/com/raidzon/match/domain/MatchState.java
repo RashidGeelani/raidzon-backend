@@ -10,12 +10,18 @@ public record MatchState(
         List<Integer> pairScores, List<Integer> tieRaids, int goldenPair, int half,
         Phase phase, Status status, int turn, int firstTurn, int raidNumber, Winner winner,
         int halfMinutes, int raidSeconds, Clock clock, Clock raidClock,
-        String currentRaiderId, boolean expiryReviewed, List<List<String>> tieBreakerRaiders, List<String> lastTieRaiders
+        String currentRaiderId, boolean expiryReviewed, List<List<String>> tieBreakerRaiders, List<String> lastTieRaiders,
+        /** raidzon-v5 only: consecutive empty raids per team this half; absent (null) for older rulesets. */
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        List<Integer> emptyRaids
 ) {
     public enum Phase { REGULATION, TIE_BREAK, GOLDEN_RAID }
     public enum Status { LIVE, PAUSED, HALF_TIME, TIED, COMPLETED }
     public enum PlayerStatus { ACTIVE, OUT, BENCH }
     public enum Winner { TEAM_A, TEAM_B, DRAW }
+
+    /** True when the raiding team's next raid is Do-or-Die (only v5 matches count empty raids). */
+    public boolean doOrDie() { return phase == Phase.REGULATION && emptyRaids != null && emptyRaids.get(turn) >= 2; }
 
     public record Player(String id, String name, String phone, PlayerStatus status,
                          int raidPoints, int tacklePoints) {
@@ -68,6 +74,7 @@ public record MatchState(
             require(player.phone().isBlank() || phones.add(player.phone()), "Each player must have a unique phone number across both teams.");
         }
         scores = pair(scores); tieScores = pair(tieScores); pairScores = pair(pairScores); tieRaids = pair(tieRaids);
+        if (emptyRaids != null) emptyRaids = pair(emptyRaids);
         require(phase != null && status != null, "Match phase and status are required.");
         require((turn == 0 || turn == 1) && (firstTurn == 0 || firstTurn == 1), "Invalid raiding side.");
         require((half == 1 || half == 2) && raidNumber >= 1 && goldenPair >= 0, "Invalid match counters.");
@@ -93,7 +100,7 @@ public record MatchState(
         }
         return new MatchState(teams, List.of(0, 0), List.of(0, 0), List.of(0, 0), List.of(0, 0), 0, 1,
                 Phase.REGULATION, Status.LIVE, firstTurn, firstTurn, 1, null, halfMinutes, raidSeconds,
-                new Clock(halfMinutes * 60_000L, now), new Clock(raidSeconds * 1_000L, null), null, false, List.of(List.of(), List.of()), List.of("", ""));
+                new Clock(halfMinutes * 60_000L, now), new Clock(raidSeconds * 1_000L, null), null, false, List.of(List.of(), List.of()), List.of("", ""), null);
     }
 
     public MatchState settleClocks(long now) { return withClocks(clock.settled(now), raidClock.settled(now)); }
@@ -102,7 +109,7 @@ public record MatchState(
     public MatchState restoreClocks(long now) { return withClocks(clock.restored(now), raidClock.restored(now)); }
     private MatchState withClocks(Clock matchClock, Clock nextRaidClock) {
         return new MatchState(teams, scores, tieScores, pairScores, tieRaids, goldenPair, half, phase, status,
-                turn, firstTurn, raidNumber, winner, halfMinutes, raidSeconds, matchClock, nextRaidClock, currentRaiderId, expiryReviewed, tieBreakerRaiders, lastTieRaiders);
+                turn, firstTurn, raidNumber, winner, halfMinutes, raidSeconds, matchClock, nextRaidClock, currentRaiderId, expiryReviewed, tieBreakerRaiders, lastTieRaiders, emptyRaids);
     }
     private static List<Integer> pair(List<Integer> values) {
         values = List.copyOf(Objects.requireNonNull(values, "score/counter pair"));

@@ -23,6 +23,8 @@ public class LiveMatchRepository {
         var target=json.createObjectNode();
         for(String field:new String[]{"scores","tieScores","status","phase","half","raidNumber","turn","currentRaiderId","clock","raidClock","winner","tieBreakerRaiders","tieRaids"})
             target.set(field,source.path(field));
+        // v5 Do-or-Die counter (absent for older rulesets) so watchers can show the Do-or-Die banner.
+        if(source.has("emptyRaids"))target.set("emptyRaids",source.get("emptyRaids"));
         var teams=target.putArray("teams");
         for(var team:source.path("teams")){
             var output=teams.addObject();output.put("name",team.path("name").asText());

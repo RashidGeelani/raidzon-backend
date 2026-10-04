@@ -15,14 +15,19 @@ import static com.raidzon.match.domain.ScoreComponent.Kind.*;
 /**
  * Deterministic transitions. The caller supplies trusted prior state and logical time.
  * raidzon-v4 = v3 rules, but each half's match clock starts with that half's first raid.
+ * raidzon-v5 = v4 plus Do-or-Die: after two empty raids in a row by a team, its next regulation raid is
+ * Do-or-Die; if that raid is also empty the raider is OUT (scored as a raider Self-Out). A raid that scores
+ * or a raider who is out resets the count, and the second half starts fresh. Mirrors the app's engine.
  */
 public final class MatchEngine {
     /** Default for requests that omit a ruleset (older clients). New app matches send raidzon-v4. */
     public static final String RULESET_VERSION = "raidzon-v3";
     public static final String V4 = "raidzon-v4";
-    public static boolean supports(String version) { return "raidzon-v2".equals(version) || RULESET_VERSION.equals(version) || V4.equals(version); }
-    /** v4 starts each half's clock with its first raid instead of at setup / half-time. */
-    public static boolean clockStartsWithFirstRaid(String version) { return V4.equals(version); }
+    public static final String V5 = "raidzon-v5";
+    public static boolean supports(String version) { return "raidzon-v2".equals(version) || RULESET_VERSION.equals(version) || V4.equals(version) || V5.equals(version); }
+    /** v4 and v5 start each half's clock with its first raid instead of at setup / half-time. */
+    public static boolean clockStartsWithFirstRaid(String version) { return V4.equals(version) || V5.equals(version); }
+    public static boolean usesDoOrDie(String version) { return V5.equals(version); }
     /** The half clock has not run yet this half (full time left and stopped). */
     static boolean halfClockPending(MatchDraft state) {
         return state.clock.startedAt() == null && state.clock.remainingMs() == state.halfMinutes * 60_000L;
@@ -41,6 +46,7 @@ public final class MatchEngine {
         require(!(action instanceof MatchAction.Undo), "Undo requires authoritative event history.");
         require(previous.status() != Status.COMPLETED, "This match is complete. Undo the last event to correct it.");
         var state = new MatchDraft(previous);
+        if (usesDoOrDie(rulesetVersion) && state.emptyRaids == null) state.emptyRaids = new ArrayList<>(List.of(0, 0));
         var components = new ArrayList<ScoreComponent>();
         String summary = switch (action) {
             case MatchAction.StartRaid start -> startRaid(state, start, now);
@@ -107,7 +113,12 @@ public final class MatchEngine {
     }
 
     private String raid(MatchDraft state, MatchAction.Raid action, long now, List<ScoreComponent> components) {
-        if (state.phase != Phase.REGULATION && action.outcome().equals("EMPTY") && !action.bonus())
+        boolean doOrDie = usesDoOrDie(rulesetVersion);
+        boolean emptyRaid = action.outcome().equals("EMPTY") && !action.bonus()
+                && action.defenderIds().isEmpty() && action.selfOutDefenderIds().isEmpty();
+        // An empty Do-or-Die raid puts the raider out, scored exactly like a raider Self-Out.
+        boolean doOrDieFailed = doOrDie && emptyRaid && state.phase == Phase.REGULATION && state.emptyRaids.get(state.turn) >= 2;
+        if ((state.phase != Phase.REGULATION && action.outcome().equals("EMPTY") && !action.bonus()) || doOrDieFailed)
             action = new MatchAction.Raid(action.raiderId(), "SELF_OUT", action.defenderIds(), action.selfOutDefenderIds(), action.tacklerId(), false, action.defenderOutOrder());
         require(state.status == Status.LIVE, "Resume the match before scoring.");
         require(action.raiderId().equals(state.currentRaiderId), "Start the raid with this raider first.");
@@ -146,6 +157,9 @@ public final class MatchEngine {
         String summary = raider.name() + ": " + action.outcome().toLowerCase(Locale.ROOT).replace('_', ' ')
                 + (action.bonus() ? " + bonus" : "") + (result.raiderPoints() >= 3 ? " · Super Raid" : "");
         if (!action.selfOutDefenderIds().isEmpty()) summary += " · " + action.selfOutDefenderIds().size() + " defender self-out";
+        if (doOrDieFailed) summary = raider.name() + ": do-or-die raid failed";
+        if (doOrDie && state.phase == Phase.REGULATION)
+            state.emptyRaids.set(attack, emptyRaid && !doOrDieFailed ? state.emptyRaids.get(attack) + 1 : 0);
         if (state.phase != Phase.REGULATION) {
             increment(state.tieRaids, attack, 1); state.lastTieRaiders.set(attack, raider.id());
         }
@@ -199,6 +213,7 @@ public final class MatchEngine {
                 require(state.status == Status.HALF_TIME, "End the first half first.");
                 state.half = 2; state.turn = 1 - state.firstTurn; state.status = Status.LIVE;
                 state.substitutions.replaceAll(ignored -> 0);
+                if (usesDoOrDie(rulesetVersion)) state.emptyRaids.replaceAll(ignored -> 0);
                 state.clock = new Clock(state.halfMinutes * 60_000L, clockStartsWithFirstRaid(rulesetVersion) ? null : now);
             }
             case END_MATCH -> {

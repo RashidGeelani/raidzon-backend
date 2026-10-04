@@ -23,6 +23,8 @@ final class MatchDraft {
     boolean expiryReviewed;
     List<List<String>> tieBreakerRaiders;
     final List<String> lastTieRaiders;
+    /** raidzon-v5 only (null otherwise): consecutive empty raids per team this half. */
+    List<Integer> emptyRaids;
 
     MatchDraft(MatchState state) {
         tieBreakerRaiders = state.tieBreakerRaiders();
@@ -37,6 +39,7 @@ final class MatchDraft {
         turn = state.turn(); firstTurn = state.firstTurn(); raidNumber = state.raidNumber(); winner = state.winner();
         halfMinutes = state.halfMinutes(); raidSeconds = state.raidSeconds(); clock = state.clock();
         raidClock = state.raidClock(); currentRaiderId = state.currentRaiderId(); expiryReviewed = state.expiryReviewed();
+        emptyRaids = state.emptyRaids() == null ? null : new ArrayList<>(state.emptyRaids());
     }
     Player find(int side, String id) { return players.get(side).stream().filter(p -> p.id().equals(id)).findFirst().orElse(null); }
     Player player(int side, String id, PlayerStatus status) {
@@ -65,6 +68,7 @@ final class MatchDraft {
         return new MatchState(List.of(new Team(names.get(0), players.get(0), queues.get(0), substitutions.get(0)),
                 new Team(names.get(1), players.get(1), queues.get(1), substitutions.get(1))),
                 scores, tieScores, pairScores, tieRaids, goldenPair, half, phase, status, turn, firstTurn,
-                raidNumber, winner, halfMinutes, raidSeconds, clock, raidClock, currentRaiderId, expiryReviewed, tieBreakerRaiders, lastTieRaiders);
+                raidNumber, winner, halfMinutes, raidSeconds, clock, raidClock, currentRaiderId, expiryReviewed, tieBreakerRaiders, lastTieRaiders,
+                emptyRaids);
     }
 }
