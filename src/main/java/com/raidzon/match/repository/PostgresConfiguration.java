@@ -37,7 +37,8 @@ public class PostgresConfiguration {
         // connection, so server-side prepared statements break ("prepared statement S_1 already
         // exists"). Disabling them is safe on a direct connection too.
         config.addDataSourceProperty("prepareThreshold", "0");
-        return new HikariDataSource(config);
+        // Times each request's database round trips; see com.raidzon.config.TimingFilter.
+        return new com.raidzon.config.RequestTiming.TimedDataSource(config);
     }
     @Bean(initMethod = "migrate") Flyway flyway(HikariDataSource dataSource) {
         return Flyway.configure().dataSource(dataSource).locations("classpath:db/migration").cleanDisabled(true).load();

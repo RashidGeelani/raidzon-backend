@@ -75,10 +75,14 @@ public class TournamentRepository {
     }
     public Tournament.Detail detail(UUID id, UUID owner) {
         var tournament=owned(id,owner,false);
+        // All rosters in one query rather than one per team: each query is a round trip to the database.
+        var rosters=new java.util.HashMap<UUID,List<Tournament.RosterPlayer>>();
+        jdbc.query("SELECT team_id,name,phone FROM tournament_roster_players WHERE tournament_id=? ORDER BY team_id,position",
+            (org.springframework.jdbc.core.RowCallbackHandler) r->rosters.computeIfAbsent(r.getObject("team_id",UUID.class),key->new java.util.ArrayList<>())
+                .add(new Tournament.RosterPlayer(r.getString("name"),r.getString("phone"))),id);
         var teams=jdbc.query("SELECT id,name,roster_revision,team_id FROM tournament_teams WHERE tournament_id=? ORDER BY name,id",(r,i)->{
             var teamId=r.getObject("id",UUID.class);
-            var roster=jdbc.query("SELECT name,phone FROM tournament_roster_players WHERE team_id=? ORDER BY position",(player,index)->new Tournament.RosterPlayer(player.getString("name"),player.getString("phone")),teamId);
-            return new Tournament.Team(teamId,r.getString("name"),r.getInt("roster_revision"),roster,r.getObject("team_id",UUID.class));
+            return new Tournament.Team(teamId,r.getString("name"),r.getInt("roster_revision"),List.copyOf(rosters.getOrDefault(teamId,List.of())),r.getObject("team_id",UUID.class));
         },id);
         var fixtures=jdbc.query("""
             SELECT f.*,m.projection->>'status' AS status,(m.projection #>> '{scores,0}')::integer AS score_a,
