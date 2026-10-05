@@ -27,8 +27,8 @@ public final class MatchService {
         var initial = request.initialState();
         var fingerprint = codec.fingerprint(request);
         return transaction.execute(status -> {
-            boolean inserted = repository.insert(request.matchId(), actor, session, request.resolvedRuleset(), fingerprint, initial);
-            var match = repository.lock(request.matchId()); authorize(match, actor, session);
+            boolean inserted = repository.insert(request.matchId(), actor, session, request.resolvedRuleset(), fingerprint, initial, request.practiceMatch());
+            var match = repository.lock(request.matchId()); authorize(match, actor, session); refuseDeleted(match);
             if (!match.ruleset().equals(request.resolvedRuleset())) throw new IllegalArgumentException("Cannot change a match ruleset.");
             if (!match.creationFingerprint().equals(fingerprint)) throw new IllegalArgumentException("Match ID was reused with different setup facts.");
             return new MatchRegistration(match.id(), match.ruleset(), match.version(), !inserted, match.state());
@@ -39,7 +39,7 @@ public final class MatchService {
         var input = codec.input(request);
         var fingerprint = codec.fingerprint(request);
         return transaction.execute(status -> {
-            var match = repository.lock(matchId); authorize(match, actor, session);
+            var match = repository.lock(matchId); authorize(match, actor, session); refuseDeleted(match);
             if (!match.ruleset().equals(request.rulesetVersion())) throw new IllegalArgumentException("Cannot mix rulesets within a match.");
             var nearby = repository.eventOrLatest(matchId, request.id(), match.version());
             for (var event : nearby) if (event.eventId().equals(request.id())) {
@@ -84,6 +84,10 @@ public final class MatchService {
         if (history.version() != match.version() || !history.state().equals(match.state()))
             throw new IllegalStateException("Stored projection does not match replay.");
         return history;
+    }
+    /** A match its organizer deleted can't be uploaded or scored again, even from a phone that still has it. */
+    private static void refuseDeleted(MatchRepository.StoredMatch match) {
+        if (match.deleted()) throw new com.raidzon.identity.service.AuthFailure(410, "MATCH_DELETED", "This match was deleted by its organizer.");
     }
     private void authorize(MatchRepository.StoredMatch match, UUID actor, UUID session) {
         if (!match.scorer().equals(actor) || !match.session().equals(session)) throw new SecurityException("This account or scoring session is read-only.");

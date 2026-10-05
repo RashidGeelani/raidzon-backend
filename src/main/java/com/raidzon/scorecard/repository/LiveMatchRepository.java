@@ -41,7 +41,7 @@ public class LiveMatchRepository {
     @Transactional(readOnly=true, isolation=org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
     public LiveMatchView read(UUID id){
         var rows=jdbc.queryForList("""
-            SELECT projection,version,updated_at FROM matches m WHERE id=? AND (
+            SELECT projection,version,updated_at FROM matches m WHERE id=? AND removed_at IS NULL AND (
                 EXISTS(SELECT 1 FROM tournament_fixtures f WHERE f.match_id=m.id)
                 OR EXISTS(SELECT 1 FROM public_scorecards s WHERE s.match_id=m.id AND s.published))
             """,id);

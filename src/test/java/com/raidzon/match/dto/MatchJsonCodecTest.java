@@ -13,7 +13,17 @@ class MatchJsonCodecTest {
         var request = new CreateMatchRequest(UUID.randomUUID(), java.util.List.of(), 0, 20, 30, 1000, "raidzon-v2");
         var oldShape = (com.fasterxml.jackson.databind.node.ObjectNode) json.valueToTree(request);
         oldShape.remove("rulesetVersion");
+        oldShape.remove("practice");
         assertEquals(codec.fingerprint(oldShape), codec.fingerprint(request));
+        // An explicit practice:false is a normal match, so it keeps the same hash.
+        var notPractice = new CreateMatchRequest(request.matchId(), request.teams(), 0, 20, 30, 1000, "raidzon-v2", false);
+        assertEquals(codec.fingerprint(request), codec.fingerprint(notPractice));
+    }
+    @Test void practiceMatchesHashDifferently() {
+        var codec = new MatchJsonCodec(new ObjectMapper());
+        var normal = new CreateMatchRequest(UUID.randomUUID(), java.util.List.of(), 0, 20, 30, 1000, "raidzon-v5");
+        var practice = new CreateMatchRequest(normal.matchId(), normal.teams(), 0, 20, 30, 1000, "raidzon-v5", true);
+        assertFalse(codec.fingerprint(normal).equals(codec.fingerprint(practice)));
     }
     @Test void everySharedActionSurvivesStorageRoundTrip() throws Exception {
         var json = new ObjectMapper(); var codec = new MatchJsonCodec(json);

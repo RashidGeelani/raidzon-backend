@@ -6,10 +6,16 @@ import java.util.UUID;
 
 /** Immutable roster snapshot input; account/device authority is supplied separately by a trusted caller. */
 public record CreateMatchRequest(UUID matchId, List<TeamRoster> teams, int firstTurn,
-                                 int halfMinutes, int raidSeconds, long startedAt, String rulesetVersion) {
+                                 int halfMinutes, int raidSeconds, long startedAt, String rulesetVersion,
+                                 Boolean practice) {
     public CreateMatchRequest(UUID matchId, List<TeamRoster> teams, int firstTurn, int halfMinutes, int raidSeconds, long startedAt) {
-        this(matchId, teams, firstTurn, halfMinutes, raidSeconds, startedAt, null);
+        this(matchId, teams, firstTurn, halfMinutes, raidSeconds, startedAt, null, null);
     }
+    public CreateMatchRequest(UUID matchId, List<TeamRoster> teams, int firstTurn, int halfMinutes, int raidSeconds, long startedAt, String rulesetVersion) {
+        this(matchId, teams, firstTurn, halfMinutes, raidSeconds, startedAt, rulesetVersion, null);
+    }
+    /** A practice match (quick match with filled-in names) never counts towards player stats or leaderboards. */
+    public boolean practiceMatch() { return Boolean.TRUE.equals(practice); }
     public String resolvedRuleset() {
         String version = rulesetVersion == null ? com.raidzon.match.domain.MatchEngine.RULESET_VERSION : rulesetVersion;
         if (!com.raidzon.match.domain.MatchEngine.supports(version)) throw new IllegalArgumentException("Unsupported ruleset version.");

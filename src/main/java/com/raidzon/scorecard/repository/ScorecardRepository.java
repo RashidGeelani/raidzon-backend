@@ -25,7 +25,7 @@ public class ScorecardRepository {
     public PublicScorecard read(UUID shareId){
         var rows=jdbc.query("""
             SELECT m.projection,m.version,m.updated_at FROM public_scorecards s JOIN matches m ON m.id=s.match_id
-            WHERE s.share_id=? AND s.published
+            WHERE s.share_id=? AND s.published AND m.removed_at IS NULL
             """,(rs,i)->{
                 try {
                     var state=json.readTree(rs.getString("projection"));

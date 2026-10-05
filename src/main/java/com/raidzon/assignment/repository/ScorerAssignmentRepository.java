@@ -26,7 +26,7 @@ public class ScorerAssignmentRepository {
         return jdbc.query("""
             SELECT m.id,m.ruleset_version,m.projection #>> '{teams,0,name}' AS team_a,m.projection #>> '{teams,1,name}' AS team_b,a.accepted
             FROM match_scorer_assignments a JOIN matches m ON m.id=a.match_id
-            WHERE a.scorer_account_id=? ORDER BY a.created_at DESC LIMIT 100
+            WHERE a.scorer_account_id=? AND m.deleted_at IS NULL ORDER BY a.created_at DESC LIMIT 100
             """,(rs,i)->new Assignment(rs.getObject("id",UUID.class),rs.getString("team_a"),rs.getString("team_b"),rs.getBoolean("accepted"),rs.getString("ruleset_version")),actor.accountId());
     }
     public void assign(UUID matchId,String phone,AuthIdentity actor) {

@@ -37,7 +37,12 @@ public final class MatchJsonCodec {
         try {
             JsonNode tree = json.valueToTree(value);
             // Preserve pre-version-field creation hashes. Ruleset identity is checked separately.
-            if (value instanceof CreateMatchRequest) ((ObjectNode) tree).remove("rulesetVersion");
+            if (value instanceof CreateMatchRequest request) {
+                ((ObjectNode) tree).remove("rulesetVersion");
+                // Only a practice match carries the flag, so earlier creation hashes stay the same.
+                if (!request.practiceMatch()) ((ObjectNode) tree).remove("practice");
+                else ((ObjectNode) tree).put("practice", true);
+            }
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
                     .digest(canonical(tree).getBytes(StandardCharsets.UTF_8)));
         } catch (Exception exception) { throw new IllegalStateException("Cannot fingerprint match data.", exception); }

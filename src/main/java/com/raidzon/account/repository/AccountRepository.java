@@ -44,8 +44,9 @@ public class AccountRepository {
     public AccountDashboard dashboard(UUID accountId) {
         String phone = jdbc.queryForObject("SELECT phone FROM user_accounts WHERE id=?", String.class, accountId);
         var profiles = jdbc.query("""
-            SELECT p.id,COALESCE(p.display_name,p.initial_name) AS initial_name,count(DISTINCT l.match_id) AS match_count
+            SELECT p.id,COALESCE(p.display_name,p.initial_name) AS initial_name,count(DISTINCT m.id) AS match_count
             FROM player_profiles p LEFT JOIN match_player_links l ON l.profile_id=p.id
+            LEFT JOIN matches m ON m.id=l.match_id AND NOT m.practice AND m.removed_at IS NULL
             WHERE p.claimed_by=? AND p.phone=? GROUP BY p.id,p.display_name,p.initial_name
             """, (rs, index) -> new AccountDashboard.PlayerProfile(rs.getObject("id", UUID.class),
                 rs.getString("initial_name"), rs.getLong("match_count"), 0, 0, 0, 0, 0, 0), accountId, phone);
@@ -62,17 +63,18 @@ public class AccountRepository {
             SELECT count(*) FROM tournament_teams tt JOIN tournaments t ON t.id=tt.tournament_id
             WHERE t.owner_account_id=?
             """, Long.class, accountId);
-        Long count = jdbc.queryForObject("SELECT count(*) FROM matches WHERE owner_account_id=?", Long.class, accountId);
+        Long count = jdbc.queryForObject("SELECT count(*) FROM matches WHERE owner_account_id=? AND deleted_at IS NULL", Long.class, accountId);
         var matches = jdbc.query("""
             SELECT id, projection #>> '{teams,0,name}' AS team_a, projection #>> '{teams,1,name}' AS team_b,
                    projection->>'status' AS status, (projection #>> '{scores,0}')::integer AS score_a,
-                   (projection #>> '{scores,1}')::integer AS score_b, updated_at
-            FROM matches WHERE owner_account_id=? ORDER BY updated_at DESC,id LIMIT 20
+                   (projection #>> '{scores,1}')::integer AS score_b, updated_at, practice, removed_at IS NOT NULL AS removed
+            FROM matches WHERE owner_account_id=? AND deleted_at IS NULL ORDER BY updated_at DESC,id LIMIT 20
             """, (rs, index) -> new AccountDashboard.MatchSummary(rs.getObject("id", UUID.class),
                 rs.getString("team_a"), rs.getString("team_b"), rs.getString("status"),
-                rs.getInt("score_a"), rs.getInt("score_b"), rs.getTimestamp("updated_at").getTime()), accountId);
+                rs.getInt("score_a"), rs.getInt("score_b"), rs.getTimestamp("updated_at").getTime(),
+                rs.getBoolean("practice"), rs.getBoolean("removed")), accountId);
         return new AccountDashboard(accountId,phone,profile,tournamentCount==null?0:tournamentCount,
-            teamCount==null?0:teamCount,count==null?0:count,matches);
+            teamCount==null?0:teamCount,count==null?0:count,matches,false);
     }
 
     private Performance performance(UUID profileId) {
@@ -87,11 +89,13 @@ public class AccountRepository {
             CROSS JOIN LATERAL jsonb_array_elements(m.projection->'teams') AS team(value)
             CROSS JOIN LATERAL jsonb_array_elements(team.value->'players') AS player(value)
             WHERE l.profile_id=? AND player.value->>'id'=l.local_player_id::text
+              AND NOT m.practice AND m.removed_at IS NULL
             """, SUPER_TEN, HIGH_FIVE, profileId);
         var superCounts = jdbc.queryForMap("""
             WITH effective_raids AS (
                 SELECT e.match_id,e.event_id,e.components,l.local_player_id
                 FROM match_player_links l JOIN match_events e ON e.match_id=l.match_id
+                JOIN matches m ON m.id=l.match_id AND NOT m.practice AND m.removed_at IS NULL
                 WHERE l.profile_id=? AND e.request #>> '{intent,type}'='RAID'
                   AND NOT EXISTS (
                       SELECT 1 FROM match_events undo

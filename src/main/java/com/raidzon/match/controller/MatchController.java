@@ -43,7 +43,10 @@ public class MatchController {
             body = body.deepCopy();
             ((ObjectNode) body).put("rulesetVersion", com.raidzon.match.domain.MatchEngine.RULESET_VERSION);
         }
-        var request=decode(body,CreateMatchRequest.class,"matchId","teams","firstTurn","halfMinutes","raidSeconds","startedAt","rulesetVersion");time(request.startedAt());
+        if(body.has("practice")&&!body.get("practice").isBoolean())throw new IllegalArgumentException("Expected boolean field: practice");
+        var fields=new java.util.ArrayList<>(java.util.List.of("matchId","teams","firstTurn","halfMinutes","raidSeconds","startedAt","rulesetVersion"));
+        if(body.has("practice"))fields.add("practice"); // optional: only sent for a practice match
+        var request=decode(body,CreateMatchRequest.class,fields.toArray(String[]::new));time(request.startedAt());
         var result=claims.claim(request,actor);live.publish(request.matchId());ObjectNode response=json.valueToTree(result);response.set("state",state(result.state()));
         return ResponseEntity.status(result.duplicate()?200:201).body(response);
     }

@@ -21,22 +21,43 @@ public class TournamentRepository {
     public List<Tournament> browse(String search) {
         return jdbc.query("SELECT * FROM tournaments WHERE position(lower(?) in lower(name || ' ' || venue))>0 ORDER BY starts_on DESC,id LIMIT 100",ROW,search);
     }
+    /** A tournament feeds the all-tournaments leaderboard once it has this many teams and completed matches. */
+    public static final int LEADERBOARD_MIN_TEAMS=4, LEADERBOARD_MIN_COMPLETED=3;
+    /**
+     * Player rankings. For one tournament: every completed match of that tournament.
+     * For all tournaments (tournamentId null), only trustworthy data counts:
+     * tournaments with at least 4 teams and 3 completed matches, and never a player's own
+     * points in a match their account scored (self-scored stats).
+     * Practice and removed matches never count.
+     */
     public List<Tournament.PlayerRanking> leaderboard(UUID tournamentId,String category){
         String order=switch(category){case "raid"->"raid_points";case "tackle"->"tackle_points";default->"total_points";};
         return jdbc.query("""
+            WITH eligible AS (
+                SELECT t.id FROM tournaments t
+                WHERE t.id=? OR (?::uuid IS NULL
+                    AND (SELECT count(*) FROM tournament_teams tt WHERE tt.tournament_id=t.id)>=?
+                    AND (SELECT count(*) FROM tournament_fixtures cf JOIN matches cm ON cm.id=cf.match_id
+                         WHERE cf.tournament_id=t.id AND cm.projection->>'status'='COMPLETED'
+                           AND NOT cm.practice AND cm.removed_at IS NULL)>=?)
+            )
             SELECT p.id,COALESCE(p.display_name,p.initial_name) AS initial_name,count(DISTINCT m.id) AS played,
                 COALESCE(sum((player.value->>'raidPoints')::bigint),0) AS raid_points,
                 COALESCE(sum((player.value->>'tacklePoints')::bigint),0) AS tackle_points,
                 COALESCE(sum((player.value->>'raidPoints')::bigint + (player.value->>'tacklePoints')::bigint),0) AS total_points,
                 (array_agg(team.value->>'name' ORDER BY m.updated_at DESC))[1] AS team_name
             FROM match_player_links l JOIN player_profiles p ON p.id=l.profile_id JOIN matches m ON m.id=l.match_id
+            JOIN tournament_fixtures f ON f.match_id=m.id JOIN eligible e ON e.id=f.tournament_id
             CROSS JOIN LATERAL jsonb_array_elements(m.projection->'teams') AS team(value)
             CROSS JOIN LATERAL jsonb_array_elements(team.value->'players') AS player(value)
             WHERE player.value->>'id'=l.local_player_id::text AND m.projection->>'status'='COMPLETED'
-                AND EXISTS(SELECT 1 FROM tournament_fixtures f WHERE f.match_id=m.id AND (?::uuid IS NULL OR f.tournament_id=?))
+                AND NOT m.practice AND m.removed_at IS NULL
+                AND (?::uuid IS NOT NULL OR NOT EXISTS(SELECT 1 FROM user_accounts a
+                    WHERE a.phone=p.phone AND a.id IN (m.owner_account_id,m.scoring_account_id)))
             GROUP BY p.id,p.display_name,p.initial_name ORDER BY
             """+order+" DESC,2,p.id LIMIT 100",
-            (r,i)->new Tournament.PlayerRanking(r.getObject("id",UUID.class),r.getString("initial_name"),r.getLong("played"),r.getLong("raid_points"),r.getLong("tackle_points"),r.getString("team_name")),tournamentId,tournamentId);
+            (r,i)->new Tournament.PlayerRanking(r.getObject("id",UUID.class),r.getString("initial_name"),r.getLong("played"),r.getLong("raid_points"),r.getLong("tackle_points"),r.getString("team_name")),
+            tournamentId,tournamentId,LEADERBOARD_MIN_TEAMS,LEADERBOARD_MIN_COMPLETED,tournamentId);
     }
     public Tournament.PublicDetail publicDetail(UUID id) {
         var owners=jdbc.queryForList("SELECT owner_account_id FROM tournaments WHERE id=?",UUID.class,id);
@@ -302,8 +323,10 @@ public class TournamentRepository {
         if(rows.isEmpty()) throw new AuthFailure(404,"FIXTURE_NOT_FOUND","Fixture not found.");
         var row=rows.getFirst();
         if(row.get("match_id")!=null){if(!row.get("match_id").equals(match))conflict("This fixture already has a match.");return;}
-        var matches=jdbc.queryForList("SELECT projection FROM matches WHERE id=? AND owner_account_id=? FOR UPDATE",match,owner);
+        var matches=jdbc.queryForList("SELECT projection,practice,removed_at FROM matches WHERE id=? AND owner_account_id=? FOR UPDATE",match,owner);
         if(matches.isEmpty())throw new AuthFailure(404,"MATCH_NOT_FOUND","Sync a match owned by this account first.");
+        if(matches.getFirst().get("removed_at")!=null)conflict("This match was removed by RaidzOn and can't be linked to a fixture.");
+        if(Boolean.TRUE.equals(matches.getFirst().get("practice")))conflict("A practice match (quick match with filled-in names) can't be linked to a fixture. Start the match from the fixture instead.");
         // A knockout fixture needs a winner: a match accepted as a draw would stop the bracket.
         String stage=jdbc.queryForObject("SELECT stage FROM tournament_fixtures WHERE id=?",String.class,fixture);
         if(("KNOCKOUT".equals(stage)||"THIRD_PLACE".equals(stage))
