@@ -112,6 +112,11 @@ public class TeamRepository {
         return jdbc.queryForObject("SELECT count(*) FROM team_staff WHERE team_id = ?", Integer.class, teamId);
     }
 
+    public boolean hasStaff(UUID teamId, UUID profileId, String role) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS(SELECT 1 FROM team_staff WHERE team_id = ? AND profile_id = ? AND role = ?)", Boolean.class, teamId, profileId, role));
+    }
+
     public boolean addStaff(UUID teamId, UUID profileId, String role, String name) {
         return jdbc.update("INSERT INTO team_staff(team_id, profile_id, role, name) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
                 teamId, profileId, role, name) == 1;

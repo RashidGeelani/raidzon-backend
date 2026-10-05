@@ -59,7 +59,15 @@ public class LiveMatchRepository {
             SELECT l.local_player_id::text AS player_id,p.display_name FROM match_player_links l
             JOIN player_profiles p ON p.id=l.profile_id WHERE l.match_id=? AND p.display_name IS NOT NULL
             """,(org.springframework.jdbc.core.RowCallbackHandler) r->ownNames.put(r.getString("player_id"),r.getString("display_name")),id);
+        // Phone clock error: the smallest (server receive time - phone event time) over recent taps.
+        // Network delay only adds to it, so the minimum is the best estimate; taps uploaded later
+        // (offline scoring) are larger and ignored. Implausible values (over 10 min) count as 0.
+        Long skew=jdbc.queryForObject("""
+            SELECT min((extract(epoch FROM accepted_at)*1000)::bigint - (request->>'occurredAt')::bigint)
+            FROM (SELECT accepted_at,request FROM match_events WHERE match_id=? ORDER BY sequence DESC LIMIT 30) recent
+            """,Long.class,id);
+        long clockOffset=skew==null||Math.abs(skew)>600_000?0:skew;
         return new LiveMatchView(id,publicState(parse(row.get("projection").toString()),json,ownNames),events,
-            ((Number)row.get("version")).intValue(),System.currentTimeMillis(),((java.sql.Timestamp)row.get("updated_at")).getTime());
+            ((Number)row.get("version")).intValue(),System.currentTimeMillis(),((java.sql.Timestamp)row.get("updated_at")).getTime(),clockOffset);
     }
 }

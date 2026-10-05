@@ -132,7 +132,10 @@ public class TournamentService {
     /** Re-copy the saved team's current squad into this tournament (e.g. after adding a replacement player). */
     @Transactional public Tournament.Detail syncSavedTeam(UUID id,UUID team,UUID owner){
         repository.owned(id,owner,true);
-        var squad=savedSquad(repository.savedTeamOf(id,team),owner);
+        UUID saved=repository.savedTeamOf(id,team);
+        // A team that joined through an approved request belongs to someone else, but its manager
+        // already agreed to play: the organizer may refresh the roster from that squad.
+        var squad=repository.joinedByRequest(id,team)?approvedSquad(saved):savedSquad(saved,owner);
         onlyOneTeam(id,team,squad.players());
         repository.syncSavedRoster(id,team,squad.players());
         return detail(id,owner);
@@ -141,6 +144,9 @@ public class TournamentService {
         var role=teams.role(savedTeam,owner);
         if(role==null)throw new com.raidzon.identity.service.AuthFailure(404,"TEAM_NOT_FOUND","Saved team not found.");
         if(role==com.raidzon.team.dto.Team.Role.COACH)throw new com.raidzon.identity.service.AuthFailure(403,"TEAM_FORBIDDEN","Only the team's owner or manager can register it.");
+        return approvedSquad(savedTeam);
+    }
+    private com.raidzon.team.repository.TeamRepository.Squad approvedSquad(UUID savedTeam){
         var squad=teams.squad(savedTeam);
         if(squad.archived())throw new com.raidzon.identity.service.AuthFailure(409,"TEAM_ARCHIVED","This team is archived.");
         if(squad.players().size()<Tournament.MIN_ROSTER)

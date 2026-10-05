@@ -56,4 +56,9 @@ public final class MatchRepository {
                 codec.write(event.result().state()), event.sequence(), matchId, request.baseVersion());
         if (updated != 1) throw new IllegalStateException("Projection version changed during event commit.");
     }
+    /** True when the match is linked to a knockout or third-place fixture, which cannot end in a draw. */
+    public boolean linkedToKnockout(UUID matchId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS(SELECT 1 FROM tournament_fixtures WHERE match_id=? AND stage IN ('KNOCKOUT','THIRD_PLACE'))", Boolean.class, matchId));
+    }
 }

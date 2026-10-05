@@ -116,8 +116,12 @@ public final class MatchEngine {
         boolean doOrDie = usesDoOrDie(rulesetVersion);
         boolean emptyRaid = action.outcome().equals("EMPTY") && !action.bonus()
                 && action.defenderIds().isEmpty() && action.selfOutDefenderIds().isEmpty();
-        // An empty Do-or-Die raid puts the raider out, scored exactly like a raider Self-Out.
-        boolean doOrDieFailed = doOrDie && emptyRaid && state.phase == Phase.REGULATION && state.emptyRaids.get(state.turn) >= 2;
+        // The raider scored nothing and went out on their own (e.g. the raid clock expired).
+        boolean raiderOnlySelfOut = action.outcome().equals("SELF_OUT") && !action.bonus()
+                && action.defenderIds().isEmpty() && action.selfOutDefenderIds().isEmpty();
+        // A Do-or-Die raid that is empty, or ends in the raider's own Self-Out, fails: the raider is out,
+        // scored as a raider Self-Out (plus the Super Tackle extra against 3 or fewer defenders).
+        boolean doOrDieFailed = doOrDie && (emptyRaid || raiderOnlySelfOut) && state.phase == Phase.REGULATION && state.emptyRaids.get(state.turn) >= 2;
         if ((state.phase != Phase.REGULATION && action.outcome().equals("EMPTY") && !action.bonus()) || doOrDieFailed)
             action = new MatchAction.Raid(action.raiderId(), "SELF_OUT", action.defenderIds(), action.selfOutDefenderIds(), action.tacklerId(), false, action.defenderOutOrder());
         require(state.status == Status.LIVE, "Resume the match before scoring.");
@@ -212,11 +216,13 @@ public final class MatchEngine {
                 require(state.currentRaiderId == null, "Finish the raid before ending the half.");
                 require(state.half == 1 && state.phase == Phase.REGULATION && liveOrPaused(state), "Only the first half can end here.");
                 state.stopClocks(now); state.status = Status.HALF_TIME;
+                // v5: the second half's three active substitutions start at half-time (older rulesets reset at SECOND_HALF).
+                if (usesDoOrDie(rulesetVersion)) state.substitutions.replaceAll(ignored -> 0);
             }
             case SECOND_HALF -> {
                 require(state.status == Status.HALF_TIME, "End the first half first.");
                 state.half = 2; state.turn = 1 - state.firstTurn; state.status = Status.LIVE;
-                state.substitutions.replaceAll(ignored -> 0);
+                if (!usesDoOrDie(rulesetVersion)) state.substitutions.replaceAll(ignored -> 0);
                 if (usesDoOrDie(rulesetVersion)) state.emptyRaids.replaceAll(ignored -> 0);
                 state.clock = new Clock(state.halfMinutes * 60_000L, clockStartsWithFirstRaid(rulesetVersion) ? null : now);
             }

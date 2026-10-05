@@ -52,6 +52,12 @@ public class TournamentRepository {
             new Tournament.PublicTeam(team.id(),team.name(),team.roster().stream().map(player->ownNames.getOrDefault(player.phone(),player.name())).toList())).toList(),
             detail.fixtures(),detail.standings(),detail.registrationOpen(),detail.format(),detail.groups(),detail.championId());
     }
+    /** True when this tournament team was added by approving a team's join request. */
+    public boolean joinedByRequest(UUID tournamentId, UUID tournamentTeamId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS(SELECT 1 FROM tournament_join_requests WHERE tournament_id=? AND tournament_team_id=? AND status='APPROVED')",
+            Boolean.class, tournamentId, tournamentTeamId));
+    }
     public List<UUID> joined(UUID account) {
         return jdbc.queryForList("SELECT tournament_id FROM tournament_followers WHERE account_id=? ORDER BY joined_at DESC",UUID.class,account);
     }
@@ -179,7 +185,7 @@ public class TournamentRepository {
     }
     /** Replaces all unplayed fixtures with the generated plan. */
     public void replaceFixtures(UUID id,List<com.raidzon.tournament.service.TournamentFormats.Planned> plan){
-        if(plan.size()>1000)conflict("Fixture limit reached.");
+        if(plan.size()>1000)conflict("Too many fixtures ("+plan.size()+"): a tournament supports up to 1000. Use groups, or fewer teams per league.");
         jdbc.update("DELETE FROM tournament_fixtures WHERE tournament_id=? AND match_id IS NULL",id);
         for(var f:plan)
             jdbc.update("""
@@ -198,6 +204,9 @@ public class TournamentRepository {
         if(jdbc.queryForObject("SELECT count(*) FROM tournament_teams WHERE id=?",Integer.class,team.id())>0)conflict("Team ID was reused.");
         if(jdbc.queryForObject("SELECT count(*) FROM tournament_teams WHERE tournament_id=?",Integer.class,id)>=64) conflict("A tournament supports up to 64 teams.");
         if(jdbc.queryForObject("SELECT count(*) FROM tournament_teams WHERE tournament_id=? AND lower(name)=lower(?)",Integer.class,id,team.name())>0) conflict("That team is already registered.");
+        // Once a match is played the draw is fixed: a late team would sit in a group or bracket without fixtures.
+        if(locked(id) && List.of("GROUPS_KNOCKOUT","KNOCKOUT").contains(format(id).type()))
+            conflict("The draw is locked because a match has been played, so new teams can't join this tournament.");
         jdbc.update("INSERT INTO tournament_teams(id,tournament_id,name) VALUES (?,?,?)",team.id(),id,team.name());
         // New teams join the end of the draw and, in a groups tournament, the group with the fewest teams.
         jdbc.update("""
@@ -295,6 +304,11 @@ public class TournamentRepository {
         if(row.get("match_id")!=null){if(!row.get("match_id").equals(match))conflict("This fixture already has a match.");return;}
         var matches=jdbc.queryForList("SELECT projection FROM matches WHERE id=? AND owner_account_id=? FOR UPDATE",match,owner);
         if(matches.isEmpty())throw new AuthFailure(404,"MATCH_NOT_FOUND","Sync a match owned by this account first.");
+        // A knockout fixture needs a winner: a match accepted as a draw would stop the bracket.
+        String stage=jdbc.queryForObject("SELECT stage FROM tournament_fixtures WHERE id=?",String.class,fixture);
+        if(("KNOCKOUT".equals(stage)||"THIRD_PLACE".equals(stage))
+            && "DRAW".equals(jdbc.queryForObject("SELECT projection->>'winner' FROM matches WHERE id=?",String.class,match)))
+            conflict("A knockout match needs a winner. Undo the draw on the scoring phone and play the tie-break.");
         // Say exactly what differs, so the scorer can fix it instead of guessing.
         var found=jdbc.queryForMap("""
             SELECT m.projection #>> '{teams,0,name}' AS match_a, m.projection #>> '{teams,1,name}' AS match_b,

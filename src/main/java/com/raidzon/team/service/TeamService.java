@@ -113,7 +113,9 @@ public class TeamService {
         String staffRole = staffRole(input.role());
         String name = name(input.name(), 70, "staff name");
         UUID profile = teams.profileFor(phone(input.phone()), name);
-        if (teams.staffCount(teamId) >= Team.MAX_STAFF) throw conflict("STAFF_FULL", "A team can have up to " + Team.MAX_STAFF + " staff.");
+        // Re-adding someone already in that role is a no-op, even when the staff list is full.
+        if (!teams.hasStaff(teamId, profile, staffRole) && teams.staffCount(teamId) >= Team.MAX_STAFF)
+            throw conflict("STAFF_FULL", "A team can have up to " + Team.MAX_STAFF + " staff.");
         if (teams.addStaff(teamId, profile, staffRole, name)) teams.touch(teamId);
         return teams.detail(teamId, role);
     }

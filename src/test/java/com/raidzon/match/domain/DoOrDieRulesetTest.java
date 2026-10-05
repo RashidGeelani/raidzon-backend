@@ -91,4 +91,33 @@ class DoOrDieRulesetTest {
         assertEquals(3, state.teams().get(0).activeCount(), "one revival only");
         assertTrue(state.teams().get(0).players().stream().allMatch(p -> p.tacklePoints() == 0), "no tackle credit");
     }
+
+    @Test void expiredDoOrDieRaidScoresLikeAnEmptyOne() {
+        var engine = new MatchEngine(MatchEngine.V5);
+        var state = setup(MatchEngine.V5).initialState();
+        state = raid(engine, state, "EMPTY").state();
+        state = raid(engine, state, "TOUCH", 4).state();       // team 0 down to 3
+        state = raid(engine, state, "EMPTY").state();
+        state = raid(engine, state, "EMPTY").state();
+        state = raid(engine, state, "EMPTY").state();          // team 0 Do-or-Die fails: 2 left
+        state = raid(engine, state, "EMPTY").state();          // team 1: 2 empty
+        state = raid(engine, state, "EMPTY").state();          // team 0: 1 empty
+        String id = raider(state);
+        state = engine.apply(state, new MatchAction.StartRaid(id), now += 1_000).state();
+        var expired = engine.apply(state, new MatchAction.Raid(id, "SELF_OUT", List.of(), List.of(), null, false), now += 60_000);
+        assertEquals(List.of(2, 5), expired.state().scores());
+        assertTrue(expired.summary().endsWith("do-or-die raid failed · Super Tackle"));
+        assertEquals(List.of(1, 0), expired.state().emptyRaids());
+    }
+
+    @Test void halfTimeSubstitutionsCountTowardsTheSecondHalf() {
+        var engine = new MatchEngine(MatchEngine.V5);
+        var state = setup(MatchEngine.V5).initialState();
+        state = engine.apply(state, MatchAction.Lifecycle.END_HALF, now += 1_000).state();
+        var team = state.teams().get(0);
+        // The setup roster has 7 players, so no bench: just check the counter resets at half-time and survives SECOND_HALF.
+        assertEquals(0, team.activeSubstitutions());
+        state = engine.apply(state, MatchAction.Lifecycle.SECOND_HALF, now += 1_000).state();
+        assertEquals(0, state.teams().get(0).activeSubstitutions());
+    }
 }

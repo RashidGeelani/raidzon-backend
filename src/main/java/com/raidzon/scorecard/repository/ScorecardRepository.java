@@ -15,10 +15,11 @@ public class ScorecardRepository {
     public UUID publish(UUID matchId,UUID owner,boolean published){
         int changed=jdbc.update("""
             INSERT INTO public_scorecards(match_id,share_id,published)
-            SELECT id,?,? FROM matches WHERE id=? AND owner_account_id=?
+            SELECT id,?,? FROM matches WHERE id=? AND (owner_account_id=? OR (? AND scoring_account_id=?))
             ON CONFLICT(match_id) DO UPDATE SET published=excluded.published
-            """,UUID.randomUUID(),published,matchId,owner);
-        if(changed!=1)throw new AuthFailure(403,"NOT_ORGANIZER","Only the match organizer can publish its scorecard.");
+            """,UUID.randomUUID(),published,matchId,owner,published,owner);
+        // The organizer can publish or stop sharing; a delegated scorer can share the live link too.
+        if(changed!=1)throw new AuthFailure(403,"NOT_ORGANIZER","Only the match organizer can stop sharing its scorecard.");
         return jdbc.queryForObject("SELECT share_id FROM public_scorecards WHERE match_id=?",UUID.class,matchId);
     }
     public PublicScorecard read(UUID shareId){

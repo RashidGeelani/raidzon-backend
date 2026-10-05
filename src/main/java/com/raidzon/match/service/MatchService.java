@@ -49,6 +49,8 @@ public final class MatchService {
             if (request.baseVersion() != match.version()) throw new IllegalArgumentException("Event version does not match current history.");
             Long started = match.initial().clock().startedAt(); // null for v4 until the first raid
             if (started != null && request.occurredAt() < started) throw new IllegalArgumentException("Event precedes match start.");
+            if (input.action() == com.raidzon.match.domain.MatchAction.Lifecycle.DRAW && repository.linkedToKnockout(matchId))
+                throw new IllegalArgumentException("A knockout match can't end in a draw. Start the tie-break instead.");
             MatchHistory.Event next;
             if (input.action() instanceof com.raidzon.match.domain.MatchAction.Undo) {
                 // Undo restores an earlier step, so it needs the verified full history.
