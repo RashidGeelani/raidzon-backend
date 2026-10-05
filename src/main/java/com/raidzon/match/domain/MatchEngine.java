@@ -145,6 +145,10 @@ public final class MatchEngine {
         add(components, attack, SELF_OUT, action.selfOutDefenderIds().size(), null);
         add(components, defend, TACKLE, result.defenderPoints(), action.tacklerId());
         add(components, defend, SUPER_TACKLE_EXTRA, result.superTackleExtra(), null);
+        // A failed Do-or-Die against 3 or fewer defenders is worth 2, like a Super Tackle:
+        // 1 Self-Out point + 1 team-only extra, still with one revival and no tackle credit.
+        boolean doOrDieSuperTackle = doOrDieFailed && state.activeCount(defend) <= 3;
+        if (doOrDieSuperTackle) add(components, defend, SUPER_TACKLE_EXTRA, 1, null);
         if (action.outcome().equals("SELF_OUT")) add(components, defend, SELF_OUT, 1, null);
         outs.forEach(id -> state.out(defend, id));
         if (action.outcome().equals("TACKLE") || action.outcome().equals("SELF_OUT")) state.out(attack, raider.id());
@@ -157,7 +161,7 @@ public final class MatchEngine {
         String summary = raider.name() + ": " + action.outcome().toLowerCase(Locale.ROOT).replace('_', ' ')
                 + (action.bonus() ? " + bonus" : "") + (result.raiderPoints() >= 3 ? " · Super Raid" : "");
         if (!action.selfOutDefenderIds().isEmpty()) summary += " · " + action.selfOutDefenderIds().size() + " defender self-out";
-        if (doOrDieFailed) summary = raider.name() + ": do-or-die raid failed";
+        if (doOrDieFailed) summary = raider.name() + ": do-or-die raid failed" + (doOrDieSuperTackle ? " · Super Tackle" : "");
         if (doOrDie && state.phase == Phase.REGULATION)
             state.emptyRaids.set(attack, emptyRaid && !doOrDieFailed ? state.emptyRaids.get(attack) + 1 : 0);
         if (state.phase != Phase.REGULATION) {
