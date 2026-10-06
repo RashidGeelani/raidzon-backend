@@ -26,8 +26,8 @@ public class TournamentRepository {
     /**
      * Player rankings. For one tournament: every completed match of that tournament.
      * For all tournaments (tournamentId null), only trustworthy data counts:
-     * tournaments with at least 4 teams and 3 completed matches, and never a player's own
-     * points in a match their account scored (self-scored stats).
+     * tournaments with at least 4 teams and 3 completed matches, and no self-scored match (one
+     * whose scorer also played in it counts for none of its players).
      * Practice and removed matches never count.
      */
     public List<Tournament.PlayerRanking> leaderboard(UUID tournamentId,String category){
@@ -52,8 +52,9 @@ public class TournamentRepository {
             CROSS JOIN LATERAL jsonb_array_elements(team.value->'players') AS player(value)
             WHERE player.value->>'id'=l.local_player_id::text AND m.projection->>'status'='COMPLETED'
                 AND NOT m.practice AND m.removed_at IS NULL
-                AND (?::uuid IS NOT NULL OR NOT EXISTS(SELECT 1 FROM user_accounts a
-                    WHERE a.phone=p.phone AND a.id IN (m.owner_account_id,m.scoring_account_id)))
+                AND (?::uuid IS NOT NULL OR NOT EXISTS(SELECT 1 FROM match_player_links sl
+                    JOIN player_profiles sp ON sp.id=sl.profile_id JOIN user_accounts sa ON sa.phone=sp.phone
+                    WHERE sl.match_id=m.id AND sa.id IN (m.owner_account_id,m.scoring_account_id)))
             GROUP BY p.id,p.display_name,p.initial_name ORDER BY
             """+order+" DESC,2,p.id LIMIT 100",
             (r,i)->new Tournament.PlayerRanking(r.getObject("id",UUID.class),r.getString("initial_name"),r.getLong("played"),r.getLong("raid_points"),r.getLong("tackle_points"),r.getString("team_name")),

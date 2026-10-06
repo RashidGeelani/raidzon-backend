@@ -12,6 +12,19 @@ public class AccountRepository {
     /** Kabaddi milestones per match: a Super 10 is 10+ raid points, a High 5 is 5+ tackle points. */
     static final int SUPER_TEN = 10, HIGH_FIVE = 5;
     private static final java.time.Duration NAME_CHANGE_INTERVAL = java.time.Duration.ofDays(30);
+    /**
+     * Which linked matches count on a player's profile: completed (an unfinished match adds nothing),
+     * not practice, not removed, and not self-scored. A match is self-scored when the account that
+     * created or scored it is also one of its players; then it counts for nobody in it.
+     * Expects aliases l (match_player_links) and m (matches).
+     * Starts with a space: text blocks drop the trailing space of the line it is appended to.
+     */
+    static final String COUNTED = " " + """
+        m.projection->>'status'='COMPLETED' AND NOT m.practice AND m.removed_at IS NULL AND NOT EXISTS (
+            SELECT 1 FROM match_player_links sl JOIN player_profiles sp ON sp.id=sl.profile_id
+            JOIN user_accounts sa ON sa.phone=sp.phone
+            WHERE sl.match_id=m.id AND sa.id IN (m.owner_account_id, m.scoring_account_id))
+        """;
     private final JdbcTemplate jdbc;
     public AccountRepository(JdbcTemplate jdbc) { this.jdbc = jdbc; }
     @org.springframework.transaction.annotation.Transactional
@@ -46,7 +59,7 @@ public class AccountRepository {
         var profiles = jdbc.query("""
             SELECT p.id,COALESCE(p.display_name,p.initial_name) AS initial_name,count(DISTINCT m.id) AS match_count
             FROM player_profiles p LEFT JOIN match_player_links l ON l.profile_id=p.id
-            LEFT JOIN matches m ON m.id=l.match_id AND NOT m.practice AND m.removed_at IS NULL
+            LEFT JOIN matches m ON m.id=l.match_id AND """ + COUNTED + """
             WHERE p.claimed_by=? AND p.phone=? GROUP BY p.id,p.display_name,p.initial_name
             """, (rs, index) -> new AccountDashboard.PlayerProfile(rs.getObject("id", UUID.class),
                 rs.getString("initial_name"), rs.getLong("match_count"), 0, 0, 0, 0, 0, 0), accountId, phone);
@@ -89,13 +102,13 @@ public class AccountRepository {
             CROSS JOIN LATERAL jsonb_array_elements(m.projection->'teams') AS team(value)
             CROSS JOIN LATERAL jsonb_array_elements(team.value->'players') AS player(value)
             WHERE l.profile_id=? AND player.value->>'id'=l.local_player_id::text
-              AND NOT m.practice AND m.removed_at IS NULL
+              AND """ + COUNTED + """
             """, SUPER_TEN, HIGH_FIVE, profileId);
         var superCounts = jdbc.queryForMap("""
             WITH effective_raids AS (
                 SELECT e.match_id,e.event_id,e.components,l.local_player_id
                 FROM match_player_links l JOIN match_events e ON e.match_id=l.match_id
-                JOIN matches m ON m.id=l.match_id AND NOT m.practice AND m.removed_at IS NULL
+                JOIN matches m ON m.id=l.match_id AND """ + COUNTED + """
                 WHERE l.profile_id=? AND e.request #>> '{intent,type}'='RAID'
                   AND NOT EXISTS (
                       SELECT 1 FROM match_events undo
