@@ -10,6 +10,8 @@ import java.util.UUID;
 
 @Service @Profile("postgres")
 public class TournamentService {
+    /** Standard kabaddi raid time; not a tournament setting. */
+    public static final int RAID_SECONDS=30;
     private final TournamentRepository repository;
     private final com.raidzon.team.repository.TeamRepository teams;
     public TournamentService(TournamentRepository repository,com.raidzon.team.repository.TeamRepository teams){this.repository=repository;this.teams=teams;}
@@ -30,7 +32,8 @@ public class TournamentService {
     public Tournament.Detail detail(UUID id, UUID owner){return repository.detail(id,owner);}
     @Transactional public Tournament.Detail create(Tournament input,UUID owner){
         required(input.id());
-        if(input.startsOn()==null || input.halfMinutes()<1 || input.halfMinutes()>60 || input.raidSeconds()<5 || input.raidSeconds()>120)throw new IllegalArgumentException("Choose a start date, 1–60 minute halves and 5–120 second raids.");
+        if(input.startsOn()==null || input.halfMinutes()<1 || input.halfMinutes()>60)throw new IllegalArgumentException("Choose a start date and 1–60 minute halves.");
+        if(input.raidSeconds()!=RAID_SECONDS)throw new IllegalArgumentException("Raids are the standard "+RAID_SECONDS+" seconds.");
         var value=new Tournament(input.id(),name(input.name(),100),name(input.venue(),160),input.startsOn(),input.halfMinutes(),input.raidSeconds());
         repository.create(value,owner);return detail(value.id(),owner);
     }
