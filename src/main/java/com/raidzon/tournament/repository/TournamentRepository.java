@@ -361,6 +361,18 @@ public class TournamentRepository {
             if(!outsiders.isEmpty())conflict("Only registered players can play this fixture. Not on the "+(side==0?row.get("team_a"):row.get("team_b"))+" roster: "+String.join(", ",outsiders)+".");
         }
         if(jdbc.queryForObject("SELECT count(*) FROM tournament_fixtures WHERE match_id=?",Integer.class,match)>0)conflict("This match is already linked to a fixture.");
+        // A team can't be on two courts at once: refuse while either team has an unfinished match in another fixture.
+        // Locking both team rows makes two links for the same team (from two tabs or phones) wait for each other.
+        UUID sideA=(UUID)fixtureTeams.get("team_a_id"), sideB=(UUID)fixtureTeams.get("team_b_id");
+        jdbc.query("SELECT id FROM tournament_teams WHERE id IN (?,?) ORDER BY id FOR UPDATE",(r,i)->null,sideA,sideB);
+        var busy=jdbc.queryForList("""
+            SELECT t.name FROM tournament_teams t WHERE t.id IN (?,?) AND EXISTS (
+              SELECT 1 FROM tournament_fixtures f JOIN matches m ON m.id=f.match_id
+              WHERE f.tournament_id=? AND f.id<>? AND t.id IN (f.team_a_id,f.team_b_id)
+                AND m.deleted_at IS NULL AND m.removed_at IS NULL AND m.projection->>'status'<>'COMPLETED')
+            ORDER BY t.name
+            """,String.class,sideA,sideB,id,fixture);
+        if(!busy.isEmpty())conflict(String.join(" and ",busy)+(busy.size()==1?" is":" are")+" already playing a live match in this tournament. Finish that match first.");
         jdbc.update("UPDATE tournament_fixtures SET match_id=? WHERE id=?",match,fixture);
     }
     public void reschedule(UUID tournamentId, UUID fixtureId, Tournament.ScheduleInput input) {

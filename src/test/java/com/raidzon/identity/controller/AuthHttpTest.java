@@ -179,6 +179,39 @@ class AuthHttpTest {
         postJson("/account/player-profile",Map.of("name","Replay","verificationToken",proof),token,403);
         assertEquals("Updated Player",jdbc.queryForObject("SELECT display_name FROM player_profiles WHERE id=?",String.class,profile));
     }
+    @Test void teamCannotPlayTwoLiveFixtureMatchesAtOnce() throws Exception {
+        String owner=login(phone(),UUID.randomUUID(),secret());
+        UUID tournament=UUID.randomUUID();
+        postJson("/tournaments",Map.of("id",tournament,"name","Parallel Cup","venue","Two courts","startsOn","2026-10-10","halfMinutes",20,"raidSeconds",30),owner,200);
+        UUID[] teams=IntStream.range(0,4).mapToObj(t->UUID.randomUUID()).toArray(UUID[]::new);
+        java.util.function.IntFunction<List<Map<String,Object>>> players=t->IntStream.range(0,7).mapToObj(i->Map.<String,Object>of("name","Player "+t+i,"phone","+9198765"+t+"000"+i)).toList();
+        for(int t=0;t<4;t++){
+            postJson("/tournaments/"+tournament+"/teams",Map.of("id",teams[t],"name","Team "+t),owner,200);
+            postJson("/tournaments/"+tournament+"/teams/"+teams[t]+"/roster",Map.of("players",players.apply(t),"expectedRevision",0),owner,200);
+        }
+        // Fixture i: Team a vs Team b, scored by match i.
+        int[][] pairs={{0,1},{2,3},{0,2}};
+        UUID[] fixtures=new UUID[3], matches=new UUID[3];
+        for(int i=0;i<3;i++){
+            fixtures[i]=UUID.randomUUID();matches[i]=UUID.randomUUID();
+            postJson("/tournaments/"+tournament+"/fixtures",Map.of("id",fixtures[i],"teamAId",teams[pairs[i][0]],"teamBId",teams[pairs[i][1]]),owner,200);
+            var sides=Arrays.stream(pairs[i]).mapToObj(t->Map.of("name","Team "+t,"players",players.apply(t).stream().map(p->{var copy=new HashMap<String,Object>(p);copy.put("id",UUID.randomUUID());return copy;}).toList())).toList();
+            postJson("/matches",Map.of("matchId",matches[i],"teams",sides,"firstTurn",0,"halfMinutes",20,"raidSeconds",30,"startedAt",1000),owner,201);
+        }
+        String link="/tournaments/"+tournament+"/fixtures/%s/match";
+        // Different teams go live at the same time.
+        postJson(link.formatted(fixtures[0]),Map.of("matchId",matches[0]),owner,200);
+        postJson(link.formatted(fixtures[1]),Map.of("matchId",matches[1]),owner,200);
+        postJson(link.formatted(fixtures[0]),Map.of("matchId",matches[0]),owner,200); // retry stays idempotent
+        // Team 0 and Team 2 are both mid-match, so their fixture is refused.
+        assertEquals("Team 0 and Team 2 are already playing a live match in this tournament. Finish that match first.",
+            postJson(link.formatted(fixtures[2]),Map.of("matchId",matches[2]),owner,409).path("message").asText());
+        jdbc.update("UPDATE matches SET projection=jsonb_set(projection,'{status}','\"COMPLETED\"') WHERE id=?",matches[0]);
+        assertEquals("Team 2 is already playing a live match in this tournament. Finish that match first.",
+            postJson(link.formatted(fixtures[2]),Map.of("matchId",matches[2]),owner,409).path("message").asText());
+        jdbc.update("UPDATE matches SET projection=jsonb_set(projection,'{status}','\"COMPLETED\"') WHERE id=?",matches[1]);
+        postJson(link.formatted(fixtures[2]),Map.of("matchId",matches[2]),owner,200);
+    }
     Map<String,Object> setup(UUID matchId) {
         var teams=IntStream.range(0,2).mapToObj(side->Map.of("name","Team "+side,"players",IntStream.range(0,7).mapToObj(i->Map.of("id",UUID.randomUUID(),"name","Player "+side+i,"phone","+9198765432"+side+i)).toList())).toList();
         return Map.of("matchId",matchId,"teams",teams,"firstTurn",0,"halfMinutes",20,"raidSeconds",30,"startedAt",1000);
