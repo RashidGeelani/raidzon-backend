@@ -131,10 +131,11 @@ public class TeamRepository {
     public Squad squad(UUID teamId) {
         var team = jdbc.queryForMap("SELECT name, archived FROM teams WHERE id = ?", teamId);
         var players = jdbc.query("""
-            SELECT m.squad_name, p.phone FROM team_members m JOIN player_profiles p ON p.id = m.profile_id
+            SELECT m.squad_name, p.phone, m.jersey FROM team_members m JOIN player_profiles p ON p.id = m.profile_id
             WHERE m.team_id = ? AND m.left_at IS NULL
             ORDER BY CASE m.leadership WHEN 'CAPTAIN' THEN 0 WHEN 'VICE_CAPTAIN' THEN 1 ELSE 2 END, m.joined_at, m.id
-            """, (r, i) -> new com.raidzon.tournament.dto.Tournament.RosterPlayer(r.getString("squad_name"), r.getString("phone")), teamId);
+            """, (r, i) -> new com.raidzon.tournament.dto.Tournament.RosterPlayer(r.getString("squad_name"), r.getString("phone"),
+                r.getObject("jersey", Integer.class)), teamId);
         return new Squad((String) team.get("name"), (Boolean) team.get("archived"), players);
     }
 

@@ -105,9 +105,9 @@ public class TournamentRepository {
         var tournament=owned(id,owner,false);
         // All rosters in one query rather than one per team: each query is a round trip to the database.
         var rosters=new java.util.HashMap<UUID,List<Tournament.RosterPlayer>>();
-        jdbc.query("SELECT team_id,name,phone FROM tournament_roster_players WHERE tournament_id=? ORDER BY team_id,position",
+        jdbc.query("SELECT team_id,name,phone,jersey FROM tournament_roster_players WHERE tournament_id=? ORDER BY team_id,position",
             (org.springframework.jdbc.core.RowCallbackHandler) r->rosters.computeIfAbsent(r.getObject("team_id",UUID.class),key->new java.util.ArrayList<>())
-                .add(new Tournament.RosterPlayer(r.getString("name"),r.getString("phone"))),id);
+                .add(new Tournament.RosterPlayer(r.getString("name"),r.getString("phone"),r.getObject("jersey",Integer.class))),id);
         var teams=jdbc.query("SELECT id,name,roster_revision,team_id FROM tournament_teams WHERE tournament_id=? ORDER BY name,id",(r,i)->{
             var teamId=r.getObject("id",UUID.class);
             return new Tournament.Team(teamId,r.getString("name"),r.getInt("roster_revision"),List.copyOf(rosters.getOrDefault(teamId,List.of())),r.getObject("team_id",UUID.class));
@@ -243,8 +243,8 @@ public class TournamentRepository {
             (r,i)->r.getInt("roster_revision"),teamId,tournamentId);
         if(teams.isEmpty())throw new AuthFailure(404,"TEAM_NOT_FOUND","Team not found.");
         int revision=teams.getFirst();
-        var current=jdbc.query("SELECT name,phone FROM tournament_roster_players WHERE team_id=? ORDER BY position",
-            (r,i)->new Tournament.RosterPlayer(r.getString("name"),r.getString("phone")),teamId);
+        var current=jdbc.query("SELECT name,phone,jersey FROM tournament_roster_players WHERE team_id=? ORDER BY position",
+            (r,i)->new Tournament.RosterPlayer(r.getString("name"),r.getString("phone"),r.getObject("jersey",Integer.class)),teamId);
         if(revision==input.expectedRevision() && current.equals(input.players()))return;
         if(revision==input.expectedRevision()+1 && current.equals(input.players()))return;
         if(revision!=input.expectedRevision())conflict("Team roster changed. Refresh before editing it again.");
@@ -265,9 +265,9 @@ public class TournamentRepository {
                 VALUES (?,?,?,(SELECT id FROM user_accounts WHERE phone=?)) ON CONFLICT(phone) DO NOTHING
                 """,UUID.randomUUID(),player.phone(),player.name(),player.phone());
             jdbc.update("""
-                INSERT INTO tournament_roster_players(tournament_id,team_id,position,name,phone,profile_id)
-                SELECT ?,?,?,?,?,id FROM player_profiles WHERE phone=?
-                """,tournamentId,teamId,index,player.name(),player.phone(),player.phone());
+                INSERT INTO tournament_roster_players(tournament_id,team_id,position,name,phone,profile_id,jersey)
+                SELECT ?,?,?,?,?,id,? FROM player_profiles WHERE phone=?
+                """,tournamentId,teamId,index,player.name(),player.phone(),player.jersey(),player.phone());
         }
         jdbc.update("UPDATE tournament_teams SET roster_revision=roster_revision+1 WHERE id=?",teamId);
     }
@@ -301,8 +301,8 @@ public class TournamentRepository {
         return saved;
     }
     public void syncSavedRoster(UUID tournamentId,UUID teamId,List<Tournament.RosterPlayer> players){
-        var current=jdbc.query("SELECT name,phone FROM tournament_roster_players WHERE team_id=? ORDER BY position",
-            (r,i)->new Tournament.RosterPlayer(r.getString("name"),r.getString("phone")),teamId);
+        var current=jdbc.query("SELECT name,phone,jersey FROM tournament_roster_players WHERE team_id=? ORDER BY position",
+            (r,i)->new Tournament.RosterPlayer(r.getString("name"),r.getString("phone"),r.getObject("jersey",Integer.class)),teamId);
         if(!current.equals(players))replaceRoster(tournamentId,teamId,players);
     }
     public void fixture(UUID id, Tournament.FixtureInput fixture) {

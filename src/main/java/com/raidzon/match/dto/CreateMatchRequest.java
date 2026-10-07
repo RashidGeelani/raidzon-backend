@@ -22,7 +22,12 @@ public record CreateMatchRequest(UUID matchId, List<TeamRoster> teams, int first
         return version;
     }
     public CreateMatchRequest { teams = teams == null ? List.of() : List.copyOf(teams); }
-    public record Player(UUID id, String name, String phone) {}
+    /** jersey: shirt number 0-999, unique within a team. Optional so phones on older app versions can still upload. */
+    public record Player(UUID id, String name, String phone,
+                         @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+                         Integer jersey) {
+        public Player(UUID id, String name, String phone) { this(id, name, phone, null); }
+    }
     public record TeamRoster(String name, List<Player> players) {
         public TeamRoster { players = players == null ? List.of() : List.copyOf(players); }
     }
@@ -37,9 +42,15 @@ public record CreateMatchRequest(UUID matchId, List<TeamRoster> teams, int first
                 var phone = p.phone() == null ? "" : p.phone().trim();
                 if (p.id() == null || (!phone.isEmpty() && !phone.matches("\\+[1-9][0-9]{7,14}")))
                     throw new IllegalArgumentException("Player IDs are required and phone numbers must be canonical international numbers.");
+                if (p.jersey() != null && (p.jersey() < 0 || p.jersey() > 999))
+                    throw new IllegalArgumentException("Jersey numbers must be between 0 and 999.");
                 return new MatchState.Player(p.id().toString(), p.name(), phone,
-                        index < 7 ? MatchState.PlayerStatus.ACTIVE : MatchState.PlayerStatus.BENCH, 0, 0);
+                        index < 7 ? MatchState.PlayerStatus.ACTIVE : MatchState.PlayerStatus.BENCH, 0, 0, p.jersey());
             }).toList();
+            var jerseys = new java.util.HashSet<Integer>();
+            for (var p : team.players())
+                if (p.jersey() != null && !jerseys.add(p.jersey()))
+                    throw new IllegalArgumentException("Jersey " + p.jersey() + " is used twice in " + team.name() + ".");
             return new MatchState.Team(team.name(), players, List.of(), 0);
         }).toList();
         var state = MatchState.start(rosters, firstTurn, halfMinutes, raidSeconds, startedAt);

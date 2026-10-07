@@ -32,6 +32,7 @@ public class LiveMatchRepository {
             for(var player:team.path("players")){
                 var p=players.addObject();
                 for(String field:new String[]{"id","name","status","raidPoints","tacklePoints"})p.set(field,player.path(field));
+                if(player.has("jersey"))p.set("jersey",player.get("jersey")); // absent for matches created before numbers
                 var ownName=ownNames.get(player.path("id").asText());
                 if(ownName!=null)p.put("name",ownName);
             }

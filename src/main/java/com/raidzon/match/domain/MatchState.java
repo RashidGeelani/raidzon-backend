@@ -23,15 +23,22 @@ public record MatchState(
     /** True when the raiding team's next raid is Do-or-Die (only v5 matches count empty raids). */
     public boolean doOrDie() { return phase == Phase.REGULATION && emptyRaids != null && emptyRaids.get(turn) >= 2; }
 
+    /** jersey: shirt number 0-999, unique within a team; absent (null) for matches created before numbers. */
     public record Player(String id, String name, String phone, PlayerStatus status,
-                         int raidPoints, int tacklePoints) {
+                         int raidPoints, int tacklePoints,
+                         @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+                         Integer jersey) {
         public Player {
             require(id != null && !id.isBlank() && name != null && !name.isBlank(), "Player identity is required.");
             phone = phone == null ? "" : phone; // optional: players without a phone are match-only
             require(status != null && raidPoints >= 0 && tacklePoints >= 0, "Invalid player state.");
+            require(jersey == null || (jersey >= 0 && jersey <= 999), "Jersey numbers are 0 to 999.");
         }
-        Player withStatus(PlayerStatus next) { return new Player(id, name, phone, next, raidPoints, tacklePoints); }
-        Player withPoints(int raid, int tackle) { return new Player(id, name, phone, status, Math.addExact(raidPoints, raid), Math.addExact(tacklePoints, tackle)); }
+        public Player(String id, String name, String phone, PlayerStatus status, int raidPoints, int tacklePoints) {
+            this(id, name, phone, status, raidPoints, tacklePoints, null);
+        }
+        Player withStatus(PlayerStatus next) { return new Player(id, name, phone, next, raidPoints, tacklePoints, jersey); }
+        Player withPoints(int raid, int tackle) { return new Player(id, name, phone, status, Math.addExact(raidPoints, raid), Math.addExact(tacklePoints, tackle), jersey); }
         public boolean superTen() { return raidPoints >= 10; }
         public boolean highFive() { return tacklePoints >= 5; }
     }

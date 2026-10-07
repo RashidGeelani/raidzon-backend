@@ -20,9 +20,10 @@ class TeamServiceRulesTest {
         assertThrows(IllegalArgumentException.class, () -> TeamService.phone("+0123456789"));
     }
     @Test void jerseyAndRolesAreValidated() {
-        assertEquals(99, TeamService.jersey(99));
+        assertEquals(999, TeamService.jersey(999));
         assertNull(TeamService.jersey(null));
-        assertThrows(IllegalArgumentException.class, () -> TeamService.jersey(100));
+        assertThrows(IllegalArgumentException.class, () -> TeamService.jersey(1000));
+        assertThrows(IllegalArgumentException.class, () -> TeamService.jersey(-1));
         assertEquals("RAIDER", TeamService.playingRole("RAIDER"));
         assertNull(TeamService.playingRole(""));
         assertThrows(IllegalArgumentException.class, () -> TeamService.playingRole("GOALKEEPER"));

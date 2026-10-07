@@ -7,7 +7,10 @@ import java.util.UUID;
 
 public record Tournament(UUID id, String name, String venue, LocalDate startsOn, int halfMinutes, int raidSeconds) {
     public record TeamInput(UUID id, String name) {}
-    public record RosterPlayer(String name, String phone) {}
+    /** jersey: shirt number 0-999 (unique within the team), optional; it pre-fills match setup. */
+    public record RosterPlayer(String name, String phone, Integer jersey) {
+        public RosterPlayer(String name, String phone) { this(name, phone, null); }
+    }
     public record RosterInput(List<RosterPlayer> players, int expectedRevision) {}
     /** teamId links to a saved (reusable) team when the roster was registered from one; otherwise null. */
     public record Team(UUID id, String name, int rosterRevision, List<RosterPlayer> roster, UUID teamId) {

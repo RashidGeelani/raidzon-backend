@@ -164,7 +164,7 @@ public class TeamService {
         return value;
     }
     static Integer jersey(Integer value) {
-        if (value != null && (value < 0 || value > 99)) throw new IllegalArgumentException("Jersey numbers are 0–99.");
+        if (value != null && (value < 0 || value > 999)) throw new IllegalArgumentException("Jersey numbers are 0–999.");
         return value;
     }
     static String playingRole(String value) {

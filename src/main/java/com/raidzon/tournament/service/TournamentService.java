@@ -45,10 +45,14 @@ public class TournamentService {
             if(player==null)throw new IllegalArgumentException("Enter each roster player.");
             var phone=player.phone();
             if(phone==null || !phone.matches("\\+[1-9][0-9]{7,14}"))throw new IllegalArgumentException("Use international player phone numbers.");
-            return new Tournament.RosterPlayer(name(player.name(),70),phone);
+            if(player.jersey()!=null && (player.jersey()<0 || player.jersey()>999))throw new IllegalArgumentException("Jersey numbers are 0 to 999.");
+            return new Tournament.RosterPlayer(name(player.name(),70),phone,player.jersey());
         }).toList();
         if(players.stream().map(Tournament.RosterPlayer::phone).distinct().count()!=players.size())
             throw new IllegalArgumentException("Each player needs a unique phone number.");
+        var jerseys=players.stream().map(Tournament.RosterPlayer::jersey).filter(java.util.Objects::nonNull).toList();
+        if(jerseys.stream().distinct().count()!=jerseys.size())
+            throw new IllegalArgumentException("Each player in a team needs a different jersey number.");
         onlyOneTeam(id,team,players);
         repository.roster(id,team,new Tournament.RosterInput(players,input.expectedRevision()));return detail(id,owner);
     }
