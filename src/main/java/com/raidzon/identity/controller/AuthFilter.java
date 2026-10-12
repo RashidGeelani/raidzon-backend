@@ -25,6 +25,7 @@ public class AuthFilter extends OncePerRequestFilter {
         if(!path.startsWith("/api/v1/")){chain.doFilter(request,response);return;}
         response.setHeader("Cache-Control","no-store");
         if(PUBLIC.contains(path)||request.getMethod().equals("OPTIONS") ||
+            (request.getMethod().equals("POST") && path.equals("/api/v1/public/installs")) ||
             (request.getMethod().equals("GET") && (path.matches("/api/v1/public/(?:scorecards|matches)/[0-9a-fA-F-]{36}") || path.equals("/api/v1/public/leaderboards") || path.matches("/api/v1/public/tournaments(?:/[0-9a-fA-F-]{36})?")))){chain.doFilter(request,response);return;}
         try {
             String header=request.getHeader("Authorization");

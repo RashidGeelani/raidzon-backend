@@ -137,6 +137,9 @@ public final class AuthService {
         require(!rows.isEmpty(),401,"UNAUTHORIZED","Your session expired. Sign in again.");
         if(verified.size()>10_000)verified.clear();
         verified.put(key,rows.getFirst());
+        // Active-user stats: writes at most once an hour per account; the guard makes it a no-op otherwise.
+        jdbc.update("UPDATE user_accounts SET last_seen_at=now() WHERE id=? AND (last_seen_at IS NULL OR last_seen_at<now()-interval '1 hour')",
+                rows.getFirst().identity().accountId());
         return rows.getFirst().identity();
     }
     /** Forget cached verifications, e.g. after tokens are revoked. */

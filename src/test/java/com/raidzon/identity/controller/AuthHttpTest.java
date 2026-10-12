@@ -56,7 +56,9 @@ class AuthHttpTest {
         properties.add("raidzon.database.url",()->url+(url.contains("?")?"&":"?")+"currentSchema="+schema);
         properties.add("raidzon.database.username",()->user);properties.add("raidzon.database.password",()->password);
         properties.add("raidzon.auth.pepper",()->"test-only-pepper-that-is-at-least-32-characters");
+        properties.add("RAIDZON_ADMIN_PHONES",()->ADMIN_PHONE);
     }
+    static final String ADMIN_PHONE="+9170000"+String.format(Locale.ROOT,"%05d",new Random().nextInt(100_000));
     String phone(){return "+91"+String.format(Locale.ROOT,"%010d",Math.floorMod(UUID.randomUUID().getLeastSignificantBits(),10_000_000_000L));}
     String secret(){return Base64.getUrlEncoder().withoutPadding().encodeToString(UUID.randomUUID().toString().substring(0,32).getBytes(java.nio.charset.StandardCharsets.UTF_8));}
     JsonNode postJson(String path,Object body,String token,int status) throws Exception {
@@ -327,5 +329,44 @@ class AuthHttpTest {
         assertEquals(14,jdbc.queryForObject("SELECT count(*) FROM player_profiles WHERE phone LIKE '+9198765432%'",Integer.class));
         var invalid=new HashMap<>(setup(UUID.randomUUID()));invalid.put("firstTurn","0");postJson("/matches",invalid,token,422);
         http.perform(get("/api/v1/unknown").header("Authorization","Bearer "+token)).andExpect(status().isNotFound());
+    }
+    @Test void appStatsAreAdminOnly() throws Exception {
+        String admin=login(ADMIN_PHONE,UUID.randomUUID(),secret()), other=login(phone(),UUID.randomUUID(),secret());
+        http.perform(get("/api/v1/admin/stats")).andExpect(status().isUnauthorized());
+        http.perform(get("/api/v1/admin/stats").header("Authorization","Bearer "+other)).andExpect(status().isForbidden());
+        var stats=json.readTree(http.perform(get("/api/v1/admin/stats").header("Authorization","Bearer "+admin))
+            .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        assertTrue(stats.path("totalUsers").asLong()>=2);
+        assertTrue(stats.path("activeToday").asLong()>=2); // both accounts were just seen
+        assertTrue(stats.path("newUsers7Days").asLong()>=2);
+        for(String field:List.of("active7Days","active30Days","totalInstalls","installs7Days","matchesScored","matchesScored7Days"))assertTrue(stats.has(field),field);
+    }
+    @Test void installPingIsPublicAndIdempotent() throws Exception {
+        String id="inst_"+UUID.randomUUID().toString().replace("-","");
+        var input=Map.of("installId",id,"source","appinstalled");
+        assertTrue(postJson("/public/installs",input,null,200).path("recorded").asBoolean());
+        assertFalse(postJson("/public/installs",Map.of("installId",id,"source","standalone_launch"),null,200).path("recorded").asBoolean());
+        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM app_installs WHERE install_id=?",Integer.class,id));
+        assertNull(jdbc.queryForObject("SELECT user_id FROM app_installs WHERE install_id=?",UUID.class,id));
+        String token=login(phone(),UUID.randomUUID(),secret()), linked="inst_"+UUID.randomUUID().toString().replace("-","");
+        postJson("/public/installs",Map.of("installId",linked,"source","standalone_launch"),token,200);
+        assertNotNull(jdbc.queryForObject("SELECT user_id FROM app_installs WHERE install_id=?",UUID.class,linked));
+        // A bad session still counts the install, anonymously.
+        String anon="inst_"+UUID.randomUUID().toString().replace("-","");
+        assertTrue(postJson("/public/installs",Map.of("installId",anon,"source","appinstalled"),"x".repeat(43),200).path("recorded").asBoolean());
+        postJson("/public/installs",Map.of("installId",id,"source","other"),null,422);
+        postJson("/public/installs",Map.of("installId","short","source","appinstalled"),null,422);
+    }
+    @Test void lastSeenIsWrittenAtMostHourly() throws Exception {
+        String token=login(phone(),UUID.randomUUID(),secret());
+        UUID account=auth.authenticate(token).accountId();
+        assertNotNull(jdbc.queryForObject("SELECT last_seen_at FROM user_accounts WHERE id=?",java.sql.Timestamp.class,account));
+        jdbc.update("UPDATE user_accounts SET last_seen_at=now()-interval '30 minutes' WHERE id=?",account);
+        var recent=jdbc.queryForObject("SELECT last_seen_at FROM user_accounts WHERE id=?",java.sql.Timestamp.class,account);
+        auth.forgetVerifiedTokens();auth.authenticate(token);
+        assertEquals(recent,jdbc.queryForObject("SELECT last_seen_at FROM user_accounts WHERE id=?",java.sql.Timestamp.class,account));
+        jdbc.update("UPDATE user_accounts SET last_seen_at=now()-interval '2 hours' WHERE id=?",account);
+        auth.forgetVerifiedTokens();auth.authenticate(token);
+        assertTrue(jdbc.queryForObject("SELECT last_seen_at > now()-interval '1 minute' FROM user_accounts WHERE id=?",Boolean.class,account));
     }
 }
