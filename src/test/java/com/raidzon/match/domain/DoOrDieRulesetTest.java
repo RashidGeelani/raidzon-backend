@@ -120,4 +120,43 @@ class DoOrDieRulesetTest {
         state = engine.apply(state, MatchAction.Lifecycle.SECOND_HALF, now += 1_000).state();
         assertEquals(0, state.teams().get(0).activeSubstitutions());
     }
+
+    /** Team 0 raids a team 1 that has 3 defenders left . */
+    private MatchState threeDefendersFor(MatchEngine engine, String ruleset) {
+        var state = setup(ruleset).initialState();
+        state = raid(engine, state, "TOUCH", 4).state();       // team 0 puts 4 of team 1 out: 3 left
+        return raid(engine, state, "EMPTY").state();           // team 1 empty raid; team 0 to raid
+    }
+    private MatchTransition selfOut(MatchEngine engine, MatchState state, List<String> defenderSelfOuts) {
+        String id = raider(state);
+        state = engine.apply(state, new MatchAction.StartRaid(id), now += 1_000).state();
+        return engine.apply(state, new MatchAction.Raid(id, "SELF_OUT", List.of(), defenderSelfOuts, null, false), now += 60_000);
+    }
+
+    @Test void v6RaiderSelfOutAgainstThreeOrFewerDefendersIsASuperTackle() {
+        var engine = new MatchEngine(MatchEngine.V6);
+        var state = threeDefendersFor(engine, MatchEngine.V6);
+        assertEquals(List.of(4, 0), state.scores());
+        var result = selfOut(engine, state, List.of());
+        assertEquals(List.of(4, 2), result.state().scores());
+        assertEquals(1, result.components().stream().filter(c -> c.kind() == ScoreComponent.Kind.SUPER_TACKLE_EXTRA).count());
+        assertTrue(result.summary().endsWith(": self out · Super Tackle"));
+        assertEquals(4, result.state().teams().get(1).activeCount(), "one revival only");
+        assertTrue(result.state().teams().get(1).players().stream().allMatch(p -> p.tacklePoints() == 0), "no tackle credit");
+    }
+
+    @Test void v6SelfOutWithDefenderOutsOrFourDefendersIsPlain() {
+        var engine = new MatchEngine(MatchEngine.V6);
+        var state = threeDefendersFor(engine, MatchEngine.V6);
+        var withOut = selfOut(engine, state, List.of(defender(state)));
+        assertTrue(withOut.components().stream().noneMatch(c -> c.kind() == ScoreComponent.Kind.SUPER_TACKLE_EXTRA));
+        var full = selfOut(engine, setup(MatchEngine.V6).initialState(), List.of());
+        assertEquals(List.of(0, 1), full.state().scores());
+    }
+
+    @Test void v5SelfOutReplaysUnchanged() {
+        var engine = new MatchEngine(MatchEngine.V5);
+        var result = selfOut(engine, threeDefendersFor(engine, MatchEngine.V5), List.of());
+        assertEquals(List.of(4, 1), result.state().scores());
+    }
 }

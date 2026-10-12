@@ -17,17 +17,22 @@ import static com.raidzon.match.domain.ScoreComponent.Kind.*;
  * raidzon-v4 = v3 rules, but each half's match clock starts with that half's first raid.
  * raidzon-v5 = v4 plus Do-or-Die: after two empty raids in a row by a team, its next regulation raid is
  * Do-or-Die; if that raid is also empty the raider is OUT (scored as a raider Self-Out). A raid that scores
- * or a raider who is out resets the count, and the second half starts fresh. Mirrors the app's engine.
+ * or a raider who is out resets the count, and the second half starts fresh.
+ * raidzon-v6 = v5 plus the Self-Out Super Tackle: a raider Self-Out (incl. a confirmed raid-clock expiry) with
+ * no defender outs against 3 or fewer defenders scores 1 Self-Out + 1 team-only Super Tackle extra.
+ * Mirrors the app's engine.
  */
 public final class MatchEngine {
     /** Default for requests that omit a ruleset (older clients). New app matches send raidzon-v4. */
     public static final String RULESET_VERSION = "raidzon-v3";
     public static final String V4 = "raidzon-v4";
     public static final String V5 = "raidzon-v5";
-    public static boolean supports(String version) { return "raidzon-v2".equals(version) || RULESET_VERSION.equals(version) || V4.equals(version) || V5.equals(version); }
-    /** v4 and v5 start each half's clock with its first raid instead of at setup / half-time. */
-    public static boolean clockStartsWithFirstRaid(String version) { return V4.equals(version) || V5.equals(version); }
-    public static boolean usesDoOrDie(String version) { return V5.equals(version); }
+    public static final String V6 = "raidzon-v6";
+    public static boolean supports(String version) { return "raidzon-v2".equals(version) || RULESET_VERSION.equals(version) || V4.equals(version) || V5.equals(version) || V6.equals(version); }
+    /** v4 onwards start each half's clock with its first raid instead of at setup / half-time. */
+    public static boolean clockStartsWithFirstRaid(String version) { return V4.equals(version) || usesDoOrDie(version); }
+    public static boolean usesDoOrDie(String version) { return V5.equals(version) || usesSelfOutSuperTackle(version); }
+    public static boolean usesSelfOutSuperTackle(String version) { return V6.equals(version); }
     /** The half clock has not run yet this half (full time left and stopped). */
     static boolean halfClockPending(MatchDraft state) {
         return state.clock.startedAt() == null && state.clock.remainingMs() == state.halfMinutes * 60_000L;
@@ -149,10 +154,12 @@ public final class MatchEngine {
         add(components, attack, SELF_OUT, action.selfOutDefenderIds().size(), null);
         add(components, defend, TACKLE, result.defenderPoints(), action.tacklerId());
         add(components, defend, SUPER_TACKLE_EXTRA, result.superTackleExtra(), null);
-        // A failed Do-or-Die against 3 or fewer defenders is worth 2, like a Super Tackle:
-        // 1 Self-Out point + 1 team-only extra, still with one revival and no tackle credit.
-        boolean doOrDieSuperTackle = doOrDieFailed && state.activeCount(defend) <= 3;
-        if (doOrDieSuperTackle) add(components, defend, SUPER_TACKLE_EXTRA, 1, null);
+        // A failed Do-or-Die (v5+) or, from v6, any raider Self-Out with no defender outs against 3 or fewer
+        // defenders is worth 2, like a Super Tackle: 1 Self-Out point + 1 team-only extra, still with one
+        // revival and no tackle credit. Added once even when both apply.
+        boolean selfOutSuperTackle = (doOrDieFailed || (usesSelfOutSuperTackle(rulesetVersion) && action.outcome().equals("SELF_OUT")
+                && action.defenderIds().isEmpty() && action.selfOutDefenderIds().isEmpty())) && state.activeCount(defend) <= 3;
+        if (selfOutSuperTackle) add(components, defend, SUPER_TACKLE_EXTRA, 1, null);
         if (action.outcome().equals("SELF_OUT")) add(components, defend, SELF_OUT, 1, null);
         outs.forEach(id -> state.out(defend, id));
         if (action.outcome().equals("TACKLE") || action.outcome().equals("SELF_OUT")) state.out(attack, raider.id());
@@ -165,7 +172,8 @@ public final class MatchEngine {
         String summary = raider.name() + ": " + action.outcome().toLowerCase(Locale.ROOT).replace('_', ' ')
                 + (action.bonus() ? " + bonus" : "") + (result.raiderPoints() >= 3 ? " · Super Raid" : "");
         if (!action.selfOutDefenderIds().isEmpty()) summary += " · " + action.selfOutDefenderIds().size() + " defender self-out";
-        if (doOrDieFailed) summary = raider.name() + ": do-or-die raid failed" + (doOrDieSuperTackle ? " · Super Tackle" : "");
+        if (selfOutSuperTackle) summary += " · Super Tackle";
+        if (doOrDieFailed) summary = raider.name() + ": do-or-die raid failed" + (selfOutSuperTackle ? " · Super Tackle" : "");
         if (doOrDie && state.phase == Phase.REGULATION)
             state.emptyRaids.set(attack, emptyRaid && !doOrDieFailed ? state.emptyRaids.get(attack) + 1 : 0);
         if (state.phase != Phase.REGULATION) {
