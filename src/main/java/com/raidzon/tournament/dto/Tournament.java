@@ -70,5 +70,9 @@ public record Tournament(UUID id, String name, String venue, LocalDate startsOn,
     public record PlayerRanking(UUID playerId,String name,long matches,long raidPoints,long tacklePoints,String teamName) {}
     /** A player's public page: the same completed tournament matches the tournament leaderboards already show. */
     public record PublicPlayer(UUID playerId,String name,long matches,long raidPoints,long tacklePoints,List<PlayerTournament> tournaments) {}
+    /** A publicly watchable match that is not finished: tournamentId/tournamentName are null for a shared friendly. */
+    public record LiveMatch(UUID matchId,UUID tournamentId,String tournamentName,String teamA,String teamB,int scoreA,int scoreB,String status,Instant updatedAt) {}
+    /** Explore tab: live public matches plus players (with a public page) whose name matches the search. */
+    public record Explore(List<LiveMatch> live,List<PlayerRanking> players) {}
     public record PlayerTournament(UUID tournamentId,String name,LocalDate startsOn,String teamName,long matches,long raidPoints,long tacklePoints) {}
 }

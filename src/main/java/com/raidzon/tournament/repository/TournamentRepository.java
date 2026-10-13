@@ -19,7 +19,12 @@ public class TournamentRepository {
         return jdbc.query("SELECT * FROM tournaments WHERE owner_account_id=? ORDER BY created_at DESC,id",ROW,owner);
     }
     public List<Tournament> browse(String search) {
-        return jdbc.query("SELECT * FROM tournaments WHERE position(lower(?) in lower(name || ' ' || venue))>0 ORDER BY starts_on DESC,id LIMIT 100",ROW,search);
+        return jdbc.query("""
+            SELECT * FROM tournaments t WHERE position(lower(?) in lower(t.name || ' ' || t.venue))>0
+                OR EXISTS(SELECT 1 FROM tournament_teams tt WHERE tt.tournament_id=t.id AND position(lower(?) in lower(tt.name))>0)
+                OR EXISTS(SELECT 1 FROM tournament_roster_players r WHERE r.tournament_id=t.id AND position(lower(?) in lower(r.name))>0)
+            ORDER BY t.starts_on DESC,t.id LIMIT 100
+            """,ROW,search,search,search);
     }
     /** A tournament feeds the all-tournaments leaderboard once it has this many teams and completed matches. */
     public static final int LEADERBOARD_MIN_TEAMS=4, LEADERBOARD_MIN_COMPLETED=3;
@@ -59,6 +64,41 @@ public class TournamentRepository {
             """+order+" DESC,2,p.id LIMIT 100",
             (r,i)->new Tournament.PlayerRanking(r.getObject("id",UUID.class),r.getString("initial_name"),r.getLong("played"),r.getLong("raid_points"),r.getLong("tackle_points"),r.getString("team_name")),
             tournamentId,tournamentId,LEADERBOARD_MIN_TEAMS,LEADERBOARD_MIN_COMPLETED,tournamentId);
+    }
+    /**
+     * Unfinished matches anyone may watch (same rule as the live view: a tournament fixture or a published
+     * scorecard), updated in the last 6 hours so abandoned matches drop off. Never practice or removed matches.
+     */
+    public List<Tournament.LiveMatch> liveMatches() {
+        return jdbc.query("""
+            SELECT m.id,t.id AS tournament_id,t.name AS tournament_name,
+                m.projection->'teams'->0->>'name' AS team_a,m.projection->'teams'->1->>'name' AS team_b,
+                COALESCE((m.projection->'scores'->>0)::int,0) AS score_a,COALESCE((m.projection->'scores'->>1)::int,0) AS score_b,
+                m.projection->>'status' AS status,m.updated_at
+            FROM matches m LEFT JOIN tournament_fixtures f ON f.match_id=m.id LEFT JOIN tournaments t ON t.id=f.tournament_id
+            WHERE m.removed_at IS NULL AND NOT m.practice AND m.projection->>'status'<>'COMPLETED'
+                AND m.updated_at>now()-interval '6 hours'
+                AND (f.id IS NOT NULL OR EXISTS(SELECT 1 FROM public_scorecards s WHERE s.match_id=m.id AND s.published))
+            ORDER BY m.updated_at DESC LIMIT 50
+            """,(r,i)->new Tournament.LiveMatch(r.getObject("id",UUID.class),r.getObject("tournament_id",UUID.class),r.getString("tournament_name"),
+                r.getString("team_a"),r.getString("team_b"),r.getInt("score_a"),r.getInt("score_b"),r.getString("status"),r.getTimestamp("updated_at").toInstant()));
+    }
+    /** Players with a public page (see publicPlayer) whose name contains the search; best scorers first. */
+    public List<Tournament.PlayerRanking> searchPlayers(String search) {
+        return jdbc.query("""
+            SELECT p.id,COALESCE(p.display_name,p.initial_name) AS name,count(DISTINCT m.id) AS played,
+                COALESCE(sum((player.value->>'raidPoints')::bigint),0) AS raid_points,
+                COALESCE(sum((player.value->>'tacklePoints')::bigint),0) AS tackle_points,
+                (array_agg(team.value->>'name' ORDER BY m.updated_at DESC))[1] AS team_name
+            FROM match_player_links l JOIN player_profiles p ON p.id=l.profile_id JOIN matches m ON m.id=l.match_id
+            JOIN tournament_fixtures f ON f.match_id=m.id
+            CROSS JOIN LATERAL jsonb_array_elements(m.projection->'teams') AS team(value)
+            CROSS JOIN LATERAL jsonb_array_elements(team.value->'players') AS player(value)
+            WHERE player.value->>'id'=l.local_player_id::text AND m.projection->>'status'='COMPLETED'
+                AND NOT m.practice AND m.removed_at IS NULL
+                AND position(lower(?) in lower(COALESCE(p.display_name,p.initial_name)))>0
+            GROUP BY p.id,p.display_name,p.initial_name ORDER BY sum((player.value->>'raidPoints')::bigint+(player.value->>'tacklePoints')::bigint) DESC,2,p.id LIMIT 20
+            """,(r,i)->new Tournament.PlayerRanking(r.getObject("id",UUID.class),r.getString("name"),r.getLong("played"),r.getLong("raid_points"),r.getLong("tackle_points"),r.getString("team_name")),search);
     }
     /** Same rows as the per-tournament leaderboards: completed tournament matches, never practice or removed. */
     public Tournament.PublicPlayer publicPlayer(UUID playerId) {

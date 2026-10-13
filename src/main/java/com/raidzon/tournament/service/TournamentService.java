@@ -23,6 +23,12 @@ public class TournamentService {
     }
     @Transactional(readOnly=true) public Tournament.PublicDetail publicDetail(UUID id){return repository.publicDetail(id);}
     @Transactional(readOnly=true) public Tournament.PublicPlayer publicPlayer(UUID id){return repository.publicPlayer(id);}
+    /** Player search needs 2+ characters; a blank search returns only the live list. */
+    public Tournament.Explore explore(String search){
+        String query=search.trim();
+        if(query.length()>100) throw new com.raidzon.identity.service.AuthFailure(400,"INVALID_SEARCH","Search must be 100 characters or fewer.");
+        return new Tournament.Explore(repository.liveMatches(),query.length()<2?List.of():repository.searchPlayers(query));
+    }
     public List<UUID> joined(UUID account){return repository.joined(account);}
     public List<Tournament.PlayerRanking> leaderboard(UUID id,String category){
         if(!List.of("raid","tackle","total").contains(category)) throw new IllegalArgumentException("Unknown leaderboard category.");
