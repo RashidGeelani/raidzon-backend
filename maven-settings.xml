@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Docker builds download from Google's mirror of Maven Central: Render's shared build IPs get
+     "429 Too Many Requests" from repo.maven.apache.org. Same artifacts, same checksums. -->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0">
+  <mirrors>
+    <mirror>
+      <id>google-maven-central</id>
+      <name>Google mirror of Maven Central</name>
+      <url>https://maven-central.storage-download.googleapis.com/maven2/</url>
+      <mirrorOf>central</mirrorOf>
+    </mirror>
+  </mirrors>
+</settings>
