@@ -13,6 +13,7 @@ raidzon:
     url: ${RAIDZON_DATABASE_URL}
     username: ${RAIDZON_DATABASE_USERNAME}
     password: ${RAIDZON_DATABASE_PASSWORD}
+    pool-size: ${RAIDZON_DATABASE_POOL_SIZE:3}
 
 spring:
   flyway:

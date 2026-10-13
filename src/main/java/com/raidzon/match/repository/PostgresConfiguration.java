@@ -22,12 +22,15 @@ public class PostgresConfiguration {
     HikariDataSource dataSource(
         @Value("${raidzon.database.url}") String url,
         @Value("${raidzon.database.username}") String username,
-        @Value("${raidzon.database.password}") String password) {
+        @Value("${raidzon.database.password}") String password,
+        // Concurrent requests beyond this wait up to 10 s, then fail with a 500; raise it (and check the
+        // database's connection limit) when many matches and viewers are live at once.
+        @Value("${raidzon.database.pool-size:3}") int poolSize) {
         var config = new HikariConfig();
         config.setJdbcUrl(url);
         config.setUsername(username);
         config.setPassword(password);
-        config.setMaximumPoolSize(3);
+        config.setMaximumPoolSize(poolSize);
         config.setMinimumIdle(1);
         config.setConnectionTimeout(10_000);
         config.setValidationTimeout(5_000);
