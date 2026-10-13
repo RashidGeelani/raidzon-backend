@@ -24,7 +24,8 @@ public class ScorecardRepository {
     }
     public PublicScorecard read(UUID shareId){
         var rows=jdbc.query("""
-            SELECT m.projection,m.version,m.updated_at FROM public_scorecards s JOIN matches m ON m.id=s.match_id
+            SELECT m.projection,m.version,m.updated_at,(SELECT f.tournament_id FROM tournament_fixtures f WHERE f.match_id=m.id LIMIT 1) AS tournament_id
+            FROM public_scorecards s JOIN matches m ON m.id=s.match_id
             WHERE s.share_id=? AND s.published AND m.removed_at IS NULL
             """,(rs,i)->{
                 try {
@@ -33,7 +34,7 @@ public class ScorecardRepository {
                     return new PublicScorecard(shareId,state.path("teams").path(0).path("name").asText(),state.path("teams").path(1).path("name").asText(),
                         state.path("scores").path(0).asInt(),state.path("scores").path(1).asInt(),state.path("tieScores").path(0).asInt(),state.path("tieScores").path(1).asInt(),
                         state.path("status").asText(),state.path("phase").asText(),state.path("half").asInt(),state.path("raidNumber").asInt(),
-                        state.path("winner").isNull()?null:state.path("winner").asText(),rs.getInt("version"),rs.getTimestamp("updated_at").getTime());
+                        state.path("winner").isNull()?null:state.path("winner").asText(),rs.getInt("version"),rs.getTimestamp("updated_at").getTime(),rs.getObject("tournament_id",UUID.class));
                 }catch(Exception error){throw new IllegalStateException("Unable to read scorecard.");}
             },shareId);
         if(rows.isEmpty())throw new AuthFailure(404,"SCORECARD_NOT_FOUND","This scorecard is unavailable or no longer shared.");

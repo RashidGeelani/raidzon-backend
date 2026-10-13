@@ -68,7 +68,9 @@ public class LiveMatchRepository {
             FROM (SELECT accepted_at,request FROM match_events WHERE match_id=? ORDER BY sequence DESC LIMIT 30) recent
             """,Long.class,id);
         long clockOffset=skew==null||Math.abs(skew)>600_000?0:skew;
+        var tournament=jdbc.queryForList("SELECT tournament_id FROM tournament_fixtures WHERE match_id=? LIMIT 1",UUID.class,id);
         return new LiveMatchView(id,publicState(parse(row.get("projection").toString()),json,ownNames),events,
-            ((Number)row.get("version")).intValue(),System.currentTimeMillis(),((java.sql.Timestamp)row.get("updated_at")).getTime(),clockOffset);
+            ((Number)row.get("version")).intValue(),System.currentTimeMillis(),((java.sql.Timestamp)row.get("updated_at")).getTime(),clockOffset,
+            tournament.isEmpty()?null:tournament.getFirst());
     }
 }

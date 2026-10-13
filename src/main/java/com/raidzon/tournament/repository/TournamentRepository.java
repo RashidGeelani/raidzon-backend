@@ -60,6 +60,27 @@ public class TournamentRepository {
             (r,i)->new Tournament.PlayerRanking(r.getObject("id",UUID.class),r.getString("initial_name"),r.getLong("played"),r.getLong("raid_points"),r.getLong("tackle_points"),r.getString("team_name")),
             tournamentId,tournamentId,LEADERBOARD_MIN_TEAMS,LEADERBOARD_MIN_COMPLETED,tournamentId);
     }
+    /** Same rows as the per-tournament leaderboards: completed tournament matches, never practice or removed. */
+    public Tournament.PublicPlayer publicPlayer(UUID playerId) {
+        var tournaments=jdbc.query("""
+            SELECT t.id,t.name,t.starts_on,count(DISTINCT m.id) AS played,
+                COALESCE(sum((player.value->>'raidPoints')::bigint),0) AS raid_points,
+                COALESCE(sum((player.value->>'tacklePoints')::bigint),0) AS tackle_points,
+                (array_agg(team.value->>'name' ORDER BY m.updated_at DESC))[1] AS team_name
+            FROM match_player_links l JOIN matches m ON m.id=l.match_id
+            JOIN tournament_fixtures f ON f.match_id=m.id JOIN tournaments t ON t.id=f.tournament_id
+            CROSS JOIN LATERAL jsonb_array_elements(m.projection->'teams') AS team(value)
+            CROSS JOIN LATERAL jsonb_array_elements(team.value->'players') AS player(value)
+            WHERE l.profile_id=? AND player.value->>'id'=l.local_player_id::text AND m.projection->>'status'='COMPLETED'
+                AND NOT m.practice AND m.removed_at IS NULL
+            GROUP BY t.id,t.name,t.starts_on ORDER BY t.starts_on DESC,t.id
+            """,(r,i)->new Tournament.PlayerTournament(r.getObject("id",UUID.class),r.getString("name"),r.getObject("starts_on",java.time.LocalDate.class),
+                r.getString("team_name"),r.getLong("played"),r.getLong("raid_points"),r.getLong("tackle_points")),playerId);
+        if(tournaments.isEmpty()) throw new AuthFailure(404,"PLAYER_NOT_FOUND","Player not found.");
+        String name=jdbc.queryForObject("SELECT COALESCE(display_name,initial_name) FROM player_profiles WHERE id=?",String.class,playerId);
+        return new Tournament.PublicPlayer(playerId,name,tournaments.stream().mapToLong(Tournament.PlayerTournament::matches).sum(),
+            tournaments.stream().mapToLong(Tournament.PlayerTournament::raidPoints).sum(),tournaments.stream().mapToLong(Tournament.PlayerTournament::tacklePoints).sum(),tournaments);
+    }
     public Tournament.PublicDetail publicDetail(UUID id) {
         var owners=jdbc.queryForList("SELECT owner_account_id FROM tournaments WHERE id=?",UUID.class,id);
         if(owners.isEmpty()) throw new AuthFailure(404,"TOURNAMENT_NOT_FOUND","Tournament not found.");

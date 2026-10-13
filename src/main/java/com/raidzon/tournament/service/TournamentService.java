@@ -22,6 +22,7 @@ public class TournamentService {
         return repository.browse(query);
     }
     @Transactional(readOnly=true) public Tournament.PublicDetail publicDetail(UUID id){return repository.publicDetail(id);}
+    @Transactional(readOnly=true) public Tournament.PublicPlayer publicPlayer(UUID id){return repository.publicPlayer(id);}
     public List<UUID> joined(UUID account){return repository.joined(account);}
     public List<Tournament.PlayerRanking> leaderboard(UUID id,String category){
         if(!List.of("raid","tackle","total").contains(category)) throw new IllegalArgumentException("Unknown leaderboard category.");
