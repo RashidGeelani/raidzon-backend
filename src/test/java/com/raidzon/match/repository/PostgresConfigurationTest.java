@@ -39,6 +39,10 @@ class PostgresConfigurationTest {
                 () -> auth.request("+919876543210", UUID.randomUUID(), "x".repeat(43), "127.0.0.1"));
         assertEquals(503, failure.status());
         assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM matches", Integer.class));
-        assertEquals(5, jdbc.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE success", Integer.class));
+        // Every versioned migration on the classpath was applied, however many there are.
+        int migrations = assertDoesNotThrow(() -> new org.springframework.core.io.support.PathMatchingResourcePatternResolver()
+                .getResources("classpath:db/migration/V*.sql").length);
+        assertTrue(migrations > 0);
+        assertEquals(migrations, jdbc.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE success AND version IS NOT NULL", Integer.class));
     }
 }

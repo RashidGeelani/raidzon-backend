@@ -123,7 +123,9 @@ class AuthHttpTest {
         postJson(schedulePath,Map.of("scheduledAt","2026-10-12T10:00:00Z","expectedRevision",0),owner,409);
         var clearSchedule=new HashMap<String,Object>();clearSchedule.put("scheduledAt",null);clearSchedule.put("expectedRevision",1);
         assertEquals(2,postJson(schedulePath,clearSchedule,owner,200).path("fixtures").get(0).path("scheduleRevision").asInt());
-        postJson("/matches",setup(match),owner,201);
+        // Tournament timers are only a default: a fixture's match may use other half lengths.
+        var matchSetup=new HashMap<>(setup(match));matchSetup.put("halfMinutes",25);
+        postJson("/matches",matchSetup,owner,201);
         UUID foreignMatch=UUID.randomUUID();postJson("/matches",setup(foreignMatch),other,201);
         String link="/tournaments/"+tournament+"/fixtures/"+fixture+"/match";
         postJson(link,Map.of("matchId",match),owner,409); // team B has no roster yet
@@ -134,9 +136,10 @@ class AuthHttpTest {
         intruderTeams.set(1,Map.of("name","Team 1","players",outsiders));intruderSetup.put("teams",intruderTeams);
         postJson("/matches",intruderSetup,owner,201);
         assertTrue(postJson(link,Map.of("matchId",intruder),owner,409).path("message").asText().contains("Outsider"));
-        UUID wrongTimers=UUID.randomUUID();var wrongSetup=new HashMap<>(setup(wrongTimers));wrongSetup.put("halfMinutes",21);
-        postJson("/matches",wrongSetup,owner,201);
-        postJson(link,Map.of("matchId",wrongTimers),owner,409);
+        UUID swapped=UUID.randomUUID();var swappedSetup=new HashMap<>(setup(swapped));
+        swappedSetup.put("teams",List.of(((List<?>)swappedSetup.get("teams")).get(1),((List<?>)swappedSetup.get("teams")).get(0)));
+        postJson("/matches",swappedSetup,owner,201);
+        assertTrue(postJson(link,Map.of("matchId",swapped),owner,409).path("message").asText().contains("wrong way round"));
         postJson(link,Map.of("matchId",foreignMatch),owner,404);
         postJson(link,Map.of("matchId",match),other,404);
         postJson(link,Map.of("matchId",match),owner,200);
@@ -234,6 +237,8 @@ class AuthHttpTest {
         String scorer=login(phone(),UUID.randomUUID(),secret());
         UUID match=UUID.randomUUID();
         postJson("/matches",setup(match),scorer,201);
+        // Only completed matches count on a player's profile.
+        jdbc.update("UPDATE matches SET projection=jsonb_set(projection,'{status}','\"COMPLETED\"') WHERE id=?",match);
         String player=login("+919876543200",UUID.randomUUID(),secret());
         var playerResponse=json.readTree(http.perform(get("/api/v1/account/dashboard").header("Authorization","Bearer "+player))
             .andExpect(status().isOk()).andExpect(header().string("Cache-Control","no-store")).andReturn().getResponse().getContentAsString());
