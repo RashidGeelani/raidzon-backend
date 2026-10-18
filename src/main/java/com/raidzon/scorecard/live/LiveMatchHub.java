@@ -3,6 +3,8 @@ package com.raidzon.scorecard.live;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.raidzon.identity.service.AuthFailure;
 import com.raidzon.scorecard.repository.LiveMatchRepository;
+import org.springframework.data.redis.listener.PatternTopic;
+import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import jakarta.servlet.ServletContext;
 import jakarta.websocket.CloseReason;
 import jakarta.websocket.DeploymentException;
@@ -34,7 +36,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Pushes live match views to watchers over WebSocket at /ws/matches/{matchId}.
  * Uses Tomcat's built-in Jakarta WebSocket support, so no extra dependency is needed.
  * One database read per accepted event is shared by every watcher of that match.
- * Single-instance: subscriptions live in memory (fine for one Render instance).
+ * Subscriptions live in memory per instance. With Redis on (raidzon.redis.enabled), every
+ * message goes through a Redis channel so watchers on any instance receive it.
  */
 @Component @Profile("postgres")
 public class LiveMatchHub implements ServletContextAware, DisposableBean {
@@ -43,7 +46,9 @@ public class LiveMatchHub implements ServletContextAware, DisposableBean {
     static final int MAX_TOTAL = 5000;
     private static final Logger log = LoggerFactory.getLogger(LiveMatchHub.class);
 
-    private final LiveMatchRepository matches;
+    private static final String CHANNEL = "raidzon:live:";
+    private final LiveViewCache views;
+    private final RedisMessageListenerContainer subscriber; // null when Redis is off
     private final ObjectMapper json;
     private final Set<String> allowedOrigins;
     private final Map<UUID, Set<Session>> watchers = new ConcurrentHashMap<>();
@@ -53,14 +58,37 @@ public class LiveMatchHub implements ServletContextAware, DisposableBean {
     private final ExecutorService sender = Executors.newVirtualThreadPerTaskExecutor();
     private final ScheduledExecutorService keepalive = Executors.newSingleThreadScheduledExecutor(Thread.ofVirtual().factory());
 
-    public LiveMatchHub(LiveMatchRepository matches, ObjectMapper json,
+    public LiveMatchHub(LiveViewCache views, ObjectMapper json,
             @Value("${RAIDZON_CORS_ORIGINS:https://raidzon.com,https://www.raidzon.com,https://raidzon.in,https://www.raidzon.in,https://raidzon-frontend.vercel.app,http://127.0.0.1:5173,http://127.0.0.1:4173}") String origins) {
-        this.matches = matches;
+        this.views = views;
         this.json = json;
         this.allowedOrigins = Set.copyOf(Arrays.stream(origins.split(",")).map(String::trim).filter(o -> !o.isEmpty()).toList());
         // Proxies (e.g. Render) drop idle sockets; a small text frame every 25s keeps them open
         // and lets clients detect a dead connection.
         keepalive.scheduleAtFixedRate(() -> broadcastAll("{\"type\":\"keepalive\"}"), 25, 25, TimeUnit.SECONDS);
+        subscriber = views.enabled() ? subscribe(views) : null;
+        if (subscriber != null) startSubscriber();
+    }
+
+    /** Start fails while Redis is unreachable; keep retrying so the app still boots without it. */
+    private void startSubscriber() {
+        try { subscriber.start(); log.info("Live updates fan out through Redis."); }
+        catch (RuntimeException down) {
+            log.warn("Redis unavailable, live updates stay on this instance; retrying in 10s: {}", down.getMessage());
+            keepalive.schedule(this::startSubscriber, 10, TimeUnit.SECONDS);
+        }
+    }
+
+    /** Delivers every instance's messages to this instance's watchers. Reconnects on its own if Redis drops. */
+    private RedisMessageListenerContainer subscribe(LiveViewCache views) {
+        var container = new RedisMessageListenerContainer();
+        container.setConnectionFactory(views.redisConnections());
+        container.addMessageListener((message, pattern) -> {
+            try { deliver(UUID.fromString(new String(message.getChannel()).substring(CHANNEL.length())), new String(message.getBody())); }
+            catch (RuntimeException bad) { log.warn("Ignored live message on {}.", new String(message.getChannel())); }
+        }, new PatternTopic(CHANNEL + "*"));
+        container.afterPropertiesSet();
+        return container;
     }
 
     @Override public void setServletContext(ServletContext context) {
@@ -87,7 +115,7 @@ public class LiveMatchHub implements ServletContextAware, DisposableBean {
             return;
         }
         if (set.add(session)) total.incrementAndGet();
-        sender.submit(() -> send(session, message(matchId)));
+        sender.submit(() -> send(session, message(matchId, false)));
     }
 
     void closed(UUID matchId, Session session) {
@@ -100,12 +128,9 @@ public class LiveMatchHub implements ServletContextAware, DisposableBean {
 
     /** Push the latest view of a match to everyone watching it. Never blocks the caller. */
     public void publish(UUID matchId) {
-        var set = watchers.get(matchId);
-        if (set == null || set.isEmpty()) return;
-        sender.submit(() -> {
-            String text = message(matchId);
-            for (var session : set) send(session, text);
-        });
+        // With Redis on, watchers may be on another instance and the cache must be refreshed anyway.
+        if (subscriber == null && watching(matchId) == 0) return;
+        sender.submit(() -> fanOut(matchId, message(matchId, true)));
     }
 
     /**
@@ -113,13 +138,12 @@ public class LiveMatchHub implements ServletContextAware, DisposableBean {
      * database read), then the full view with the event list and players' own names.
      */
     public void publish(UUID matchId, int version, com.fasterxml.jackson.databind.JsonNode projection) {
-        var set = watchers.get(matchId);
-        if (set == null || set.isEmpty()) return;
-        if (Boolean.TRUE.equals(visible.get(matchId))) {
+        if (subscriber == null && watching(matchId) == 0) return;
+        if (subscriber == null ? Boolean.TRUE.equals(visible.get(matchId)) : views.cachedPublic(matchId)) {
             try {
                 String fast = json.writeValueAsString(Map.of("type", "state", "version", version, "serverTime", System.currentTimeMillis(),
                         "state", LiveMatchRepository.publicState(projection, json)));
-                for (var session : set) sender.submit(() -> send(session, fast));
+                sender.submit(() -> fanOut(matchId, fast));
             } catch (Exception error) {
                 log.warn("Fast live update for {} could not be built.", matchId, error);
             }
@@ -128,16 +152,30 @@ public class LiveMatchHub implements ServletContextAware, DisposableBean {
     }
 
     /** Stops fast pushes until the next full view confirms the match is public again. */
-    public void recheckVisibility(UUID matchId) { visible.remove(matchId); }
+    public void recheckVisibility(UUID matchId) { visible.remove(matchId); views.evict(matchId); }
 
     public int watching(UUID matchId) {
         var set = watchers.get(matchId);
         return set == null ? 0 : set.size();
     }
 
-    private String message(UUID matchId) {
+    /** Sends to watchers on every instance through Redis, or straight to local watchers. */
+    private void fanOut(UUID matchId, String text) {
+        if (subscriber != null && subscriber.isRunning()) {
+            try { views.redisPublish(CHANNEL + matchId, text); return; }
+            catch (RuntimeException error) { log.warn("Redis publish failed, sending to this instance only: {}", error.getMessage()); }
+        }
+        deliver(matchId, text);
+    }
+
+    private void deliver(UUID matchId, String text) {
+        var set = watchers.get(matchId);
+        if (set != null) for (var session : set) sender.submit(() -> send(session, text));
+    }
+
+    private String message(UUID matchId, boolean fresh) {
         try {
-            String text = json.writeValueAsString(Map.of("type", "view", "view", matches.read(matchId)));
+            String text = json.writeValueAsString(Map.of("type", "view", "view", fresh ? views.refresh(matchId) : views.read(matchId)));
             if (watchers.containsKey(matchId)) visible.put(matchId, true);
             return text;
         } catch (AuthFailure notPublic) {
@@ -167,6 +205,7 @@ public class LiveMatchHub implements ServletContextAware, DisposableBean {
     }
 
     @Override public void destroy() {
+        if (subscriber != null) try { subscriber.destroy(); } catch (Exception ignored) {}
         keepalive.shutdownNow();
         sender.shutdownNow();
     }
