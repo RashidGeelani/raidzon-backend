@@ -15,7 +15,18 @@ raidzon:
     password: ${RAIDZON_DATABASE_PASSWORD}
     pool-size: ${RAIDZON_DATABASE_POOL_SIZE:3}
 
+  # Optional. Off: one instance, every read hits Postgres. On: live views are cached in Redis and
+  # WebSocket updates fan out through Redis pub/sub, so several instances can serve watchers.
+  redis:
+    enabled: ${RAIDZON_REDIS_ENABLED:false}
+
 spring:
+  data:
+    redis:
+      url: ${RAIDZON_REDIS_URL:redis://127.0.0.1:6379}
+      timeout: 500ms
+      connect-timeout: 1s
+
   flyway:
     enabled: true
     locations: classpath:db/migration

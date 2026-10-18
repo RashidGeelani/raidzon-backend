@@ -16,6 +16,7 @@ public class LiveMatchRepository {
     private final JdbcTemplate jdbc;
     private final ObjectMapper json;
     public LiveMatchRepository(JdbcTemplate jdbc,ObjectMapper json){this.jdbc=jdbc;this.json=json;}
+    public static AuthFailure notPublic(){return new AuthFailure(404,"MATCH_NOT_PUBLIC","This match is not available to watch.");}
     private JsonNode parse(String value){try{return json.readTree(value);}catch(Exception error){throw new IllegalStateException("Unable to read match view.",error);}}
     public static ObjectNode publicState(JsonNode source,ObjectMapper json){return publicState(source,json,java.util.Map.of());}
     /** ownNames maps match-local player IDs to the player's own profile name, which replaces the stored roster name. */
@@ -28,6 +29,7 @@ public class LiveMatchRepository {
         var teams=target.putArray("teams");
         for(var team:source.path("teams")){
             var output=teams.addObject();output.put("name",team.path("name").asText());
+            output.set("queue",team.path("queue")); // revival order (player IDs) for the viewer's out queue
             var players=output.putArray("players");
             for(var player:team.path("players")){
                 var p=players.addObject();
@@ -46,15 +48,18 @@ public class LiveMatchRepository {
                 EXISTS(SELECT 1 FROM tournament_fixtures f WHERE f.match_id=m.id)
                 OR EXISTS(SELECT 1 FROM public_scorecards s WHERE s.match_id=m.id AND s.published))
             """,id);
-        if(rows.isEmpty())throw new AuthFailure(404,"MATCH_NOT_PUBLIC","This match is not available to watch.");
+        if(rows.isEmpty())throw notPublic();
         var row=rows.getFirst();
+        // Every event, so viewers get the full match log during and after the game.
         var events=jdbc.query("""
-            SELECT e.event_id,e.request->'intent'->>'type' AS type,e.summary,e.before_state->>'raidNumber' AS raid,e.components
+            SELECT e.event_id,e.request->'intent'->>'type' AS type,e.summary,e.before_state->>'raidNumber' AS raid,e.components,
+                coalesce(e.request->'intent'->'defenderIds','[]') AS touched,coalesce(e.request->'intent'->'selfOutDefenderIds','[]') AS self_outs
             FROM match_events e WHERE e.match_id=? AND NOT EXISTS(
                 SELECT 1 FROM match_events u WHERE u.match_id=e.match_id AND u.request #>> '{intent,type}'='UNDO'
                 AND u.request #>> '{intent,targetEventId}'=e.event_id::text)
-            ORDER BY e.sequence DESC LIMIT 30
-            """,(r,i)->new LiveMatchView.Event(r.getObject("event_id",UUID.class),r.getString("type"),r.getString("summary"),r.getInt("raid"),parse(r.getString("components"))),id);
+            ORDER BY e.sequence DESC
+            """,(r,i)->new LiveMatchView.Event(r.getObject("event_id",UUID.class),r.getString("type"),r.getString("summary"),r.getInt("raid"),parse(r.getString("components")),
+                parse(r.getString("touched")),parse(r.getString("self_outs"))),id);
         var ownNames=new java.util.HashMap<String,String>();
         jdbc.query("""
             SELECT l.local_player_id::text AS player_id,p.display_name FROM match_player_links l

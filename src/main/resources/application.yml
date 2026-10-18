@@ -14,6 +14,10 @@ server:
   forward-headers-strategy: native
 
 management:
+  # The app falls back to Postgres when Redis is down, so Redis must not fail the health check.
+  health:
+    redis:
+      enabled: false
   endpoints:
     web:
       exposure:

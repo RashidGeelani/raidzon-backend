@@ -11,5 +11,6 @@ import java.util.UUID;
  */
 public record LiveMatchView(UUID matchId, JsonNode state, List<Event> events, int version,
                             long serverTime, long lastSyncedAt, long clockOffset, UUID tournamentId) {
-    public record Event(UUID id, String type, String summary, int raidNumber, JsonNode components) {}
+    /** touchedIds / selfOutIds: defenders put out in a raid (player IDs), so viewers can name them. */
+    public record Event(UUID id, String type, String summary, int raidNumber, JsonNode components, JsonNode touchedIds, JsonNode selfOutIds) {}
 }
