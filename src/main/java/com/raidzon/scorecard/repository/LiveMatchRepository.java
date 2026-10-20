@@ -73,9 +73,12 @@ public class LiveMatchRepository {
             FROM (SELECT accepted_at,request FROM match_events WHERE match_id=? ORDER BY sequence DESC LIMIT 30) recent
             """,Long.class,id);
         long clockOffset=skew==null||Math.abs(skew)>600_000?0:skew;
-        var tournament=jdbc.queryForList("SELECT tournament_id FROM tournament_fixtures WHERE match_id=? LIMIT 1",UUID.class,id);
+        // Tournament link and venue, and when play started: for viewers and search engines (date and place of the match).
+        var tournament=jdbc.queryForList("SELECT f.tournament_id,t.venue FROM tournament_fixtures f JOIN tournaments t ON t.id=f.tournament_id WHERE f.match_id=? LIMIT 1",id);
+        var started=jdbc.queryForObject("SELECT COALESCE((SELECT min(accepted_at) FROM match_events WHERE match_id=?),(SELECT created_at FROM matches WHERE id=?))",java.sql.Timestamp.class,id,id);
         return new LiveMatchView(id,publicState(parse(row.get("projection").toString()),json,ownNames),events,
             ((Number)row.get("version")).intValue(),System.currentTimeMillis(),((java.sql.Timestamp)row.get("updated_at")).getTime(),clockOffset,
-            tournament.isEmpty()?null:tournament.getFirst());
+            tournament.isEmpty()?null:(UUID)tournament.getFirst().get("tournament_id"),
+            started==null?null:started.getTime(),tournament.isEmpty()?null:(String)tournament.getFirst().get("venue"));
     }
 }
