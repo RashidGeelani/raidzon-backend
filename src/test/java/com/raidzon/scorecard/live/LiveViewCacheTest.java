@@ -21,7 +21,7 @@ class LiveViewCacheTest {
     private final ObjectMapper json = new ObjectMapper();
     private final LiveMatchRepository db = mock(LiveMatchRepository.class);
     private final UUID id = UUID.randomUUID();
-    private final LiveMatchView view = new LiveMatchView(id, json.createObjectNode().put("home", 7), List.of(), 3, 1_000, 900, 0, null);
+    private final LiveMatchView view = new LiveMatchView(id, json.createObjectNode().put("home", 7), List.of(), 3, 1_000, 900, 0, null, 800L, "Srinagar");
 
     @SuppressWarnings("unchecked")
     private LiveViewCache cache(StringRedisTemplate redis) {

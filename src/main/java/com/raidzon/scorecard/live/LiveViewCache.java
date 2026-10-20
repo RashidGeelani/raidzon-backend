@@ -51,7 +51,7 @@ public class LiveViewCache {
             var v = json.readValue(cached, LiveMatchView.class);
             // serverTime anchors viewers' match clocks, so it must be the time of this read.
             return new LiveMatchView(v.matchId(), v.state(), v.events(), v.version(), System.currentTimeMillis(),
-                    v.lastSyncedAt(), v.clockOffset(), v.tournamentId());
+                    v.lastSyncedAt(), v.clockOffset(), v.tournamentId(), v.startedAt(), v.venue());
         } catch (Exception unreadable) {
             return refresh(id);
         }
