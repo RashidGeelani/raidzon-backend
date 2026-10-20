@@ -244,7 +244,11 @@ class AuthHttpTest {
             .andExpect(status().isOk()).andExpect(header().string("Cache-Control","no-store")).andReturn().getResponse().getContentAsString());
         assertEquals("+919876543200",playerResponse.path("phone").asText());
         assertEquals("Player 00",playerResponse.path("playerProfile").path("name").asText());
-        assertTrue(playerResponse.path("playerProfile").path("matchCount").asLong()>=1);
+        // A new friendly no longer counts; one already on the server before V23 (legacy_stats) still does.
+        assertEquals(0,playerResponse.path("playerProfile").path("matchCount").asLong());
+        jdbc.update("UPDATE matches SET legacy_stats=true WHERE id=?",match);
+        assertTrue(json.readTree(http.perform(get("/api/v1/account/dashboard").header("Authorization","Bearer "+player))
+            .andReturn().getResponse().getContentAsString()).path("playerProfile").path("matchCount").asLong()>=1);
         assertEquals(0,playerResponse.path("playerProfile").path("raidPoints").asLong());
         assertEquals(0,playerResponse.path("playerProfile").path("tacklePoints").asLong());
         assertEquals(0,playerResponse.path("playerProfile").path("superRaids").asLong());
