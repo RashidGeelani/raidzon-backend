@@ -87,6 +87,7 @@ public class TournamentRepository {
                 COALESCE(sum((player.value->>'tacklePoints')::bigint),0) AS tackle_points,
                 (array_agg(team.value->>'name' ORDER BY m.updated_at DESC))[1] AS team_name
             FROM match_player_links l JOIN player_profiles p ON p.id=l.profile_id JOIN matches m ON m.id=l.match_id
+            JOIN tournament_fixtures f ON f.match_id=m.id -- the public page lists tournament matches only
             CROSS JOIN LATERAL jsonb_array_elements(m.projection->'teams') AS team(value)
             CROSS JOIN LATERAL jsonb_array_elements(team.value->'players') AS player(value)
             WHERE player.value->>'id'=l.local_player_id::text AND """ + com.raidzon.account.repository.AccountRepository.COUNTED + """

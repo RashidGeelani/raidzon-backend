@@ -42,7 +42,9 @@ public class SitemapController {
                 AND NOT """ + CountingRules.testTournament("t") + """
             UNION ALL
             -- Players with a public page: at least one match that counts in their stats (TournamentRepository.publicPlayer).
+            -- (A tournament match: the public page groups stats by tournament, so legacy friendlies alone give no page.)
             SELECT '/players/'||l.profile_id,max(m.updated_at) FROM match_player_links l JOIN matches m ON m.id=l.match_id
+            JOIN tournament_fixtures pf ON pf.match_id=m.id
             WHERE """ + com.raidzon.account.repository.AccountRepository.COUNTED + """
             GROUP BY l.profile_id
             ORDER BY updated_at DESC LIMIT 49000
