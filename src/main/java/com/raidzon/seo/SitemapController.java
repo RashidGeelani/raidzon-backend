@@ -15,19 +15,21 @@ public class SitemapController {
     private final String site;
     public SitemapController(JdbcTemplate jdbc,@Value("${raidzon.site-origin:https://raidzon.com}") String site){this.jdbc=jdbc;this.site=site.replaceAll("/+$","");}
 
+    static final int MIN_RAIDS=15;
     // ponytail: one sitemap capped at 50k URLs (the protocol limit); split into a sitemap index past that.
     @GetMapping(value="/api/v1/public/sitemap.xml",produces="application/xml")
     public String sitemap(){
         var xml=new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n");
         for(String page:new String[]{"/","/help","/privacy"})xml.append("<url><loc>").append(site).append(page).append("</loc></url>\n");
-        // Same visibility rule as the public live view: tournament fixtures and published scorecards, never removed or practice matches.
+        // Matches: same visibility rule as the public live view (tournament fixture or published scorecard, never removed
+        // or practice), and only finished ones with at least MIN_RAIDS raids: short or unfinished (often test) matches
+        // are thin pages, and the frontend marks them noindex (api/page.js MIN_RAIDS). Scorecards repeat /watch, so
+        // they are not listed.
         jdbc.query("""
-            SELECT '/watch/'||m.id AS path,m.updated_at FROM matches m WHERE m.removed_at IS NULL AND NOT m.practice AND (
-                EXISTS(SELECT 1 FROM tournament_fixtures f WHERE f.match_id=m.id)
-                OR EXISTS(SELECT 1 FROM public_scorecards s WHERE s.match_id=m.id AND s.published))
-            UNION ALL
-            SELECT '/scorecard/'||s.share_id,m.updated_at FROM public_scorecards s JOIN matches m ON m.id=s.match_id
-            WHERE s.published AND m.removed_at IS NULL AND NOT m.practice
+            SELECT '/watch/'||m.id AS path,m.updated_at FROM matches m WHERE m.removed_at IS NULL AND NOT m.practice
+                AND m.projection->>'status'='COMPLETED' AND (m.projection->>'raidNumber')::int>=?
+                AND (EXISTS(SELECT 1 FROM tournament_fixtures f WHERE f.match_id=m.id)
+                    OR EXISTS(SELECT 1 FROM public_scorecards s WHERE s.match_id=m.id AND s.published))
             UNION ALL
             -- Tournaments with at least two teams (empty drafts are thin pages).
             SELECT '/tournaments/'||t.id,COALESCE((SELECT max(fm.updated_at) FROM tournament_fixtures ff JOIN matches fm ON fm.id=ff.match_id
@@ -41,7 +43,7 @@ public class SitemapController {
             GROUP BY l.profile_id
             ORDER BY updated_at DESC LIMIT 49000
             """,(org.springframework.jdbc.core.RowCallbackHandler) r->xml.append("<url><loc>").append(site).append(r.getString("path"))
-                .append("</loc><lastmod>").append(DateTimeFormatter.ISO_LOCAL_DATE.format(r.getTimestamp("updated_at").toInstant().atOffset(ZoneOffset.UTC))).append("</lastmod></url>\n"));
+                .append("</loc><lastmod>").append(DateTimeFormatter.ISO_LOCAL_DATE.format(r.getTimestamp("updated_at").toInstant().atOffset(ZoneOffset.UTC))).append("</lastmod></url>\n"),MIN_RAIDS);
         return xml.append("</urlset>\n").toString();
     }
 }
