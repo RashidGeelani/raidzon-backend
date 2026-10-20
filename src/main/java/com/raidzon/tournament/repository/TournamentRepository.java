@@ -20,18 +20,17 @@ public class TournamentRepository {
     }
     public List<Tournament> browse(String search) {
         return jdbc.query("""
-            SELECT * FROM tournaments t WHERE position(lower(?) in lower(t.name || ' ' || t.venue))>0
+            SELECT * FROM tournaments t WHERE NOT """ + CountingRules.testTournament("t") + """
+                AND (position(lower(?) in lower(t.name || ' ' || t.venue))>0
                 OR EXISTS(SELECT 1 FROM tournament_teams tt WHERE tt.tournament_id=t.id AND position(lower(?) in lower(tt.name))>0)
-                OR EXISTS(SELECT 1 FROM tournament_roster_players r WHERE r.tournament_id=t.id AND position(lower(?) in lower(r.name))>0)
+                OR EXISTS(SELECT 1 FROM tournament_roster_players r WHERE r.tournament_id=t.id AND position(lower(?) in lower(r.name))>0))
             ORDER BY t.starts_on DESC,t.id LIMIT 100
             """,ROW,search,search,search);
     }
-    /** A tournament feeds the all-tournaments leaderboard once it has this many teams and completed matches. */
-    public static final int LEADERBOARD_MIN_TEAMS=4, LEADERBOARD_MIN_COMPLETED=3;
     /**
      * Player rankings. For one tournament: every completed match of that tournament.
      * For all tournaments (tournamentId null), only trustworthy data counts:
-     * tournaments with at least 4 teams and 3 completed matches, and no self-scored match (one
+     * tournaments with at least 4 teams and 3 completed matches (CountingRules, never TEST data), and no self-scored match (one
      * whose scorer also played in it counts for none of its players).
      * Practice and removed matches never count.
      */
@@ -40,11 +39,7 @@ public class TournamentRepository {
         return jdbc.query("""
             WITH eligible AS (
                 SELECT t.id FROM tournaments t
-                WHERE t.id=? OR (?::uuid IS NULL
-                    AND (SELECT count(*) FROM tournament_teams tt WHERE tt.tournament_id=t.id)>=?
-                    AND (SELECT count(*) FROM tournament_fixtures cf JOIN matches cm ON cm.id=cf.match_id
-                         WHERE cf.tournament_id=t.id AND cm.projection->>'status'='COMPLETED'
-                           AND NOT cm.practice AND cm.removed_at IS NULL)>=?)
+                WHERE t.id=? OR (?::uuid IS NULL AND """ + CountingRules.eligibleTournament("t") + ")" + """
             )
             SELECT p.id,COALESCE(p.display_name,p.initial_name) AS initial_name,count(DISTINCT m.id) AS played,
                 COALESCE(sum((player.value->>'raidPoints')::bigint),0) AS raid_points,
@@ -63,7 +58,7 @@ public class TournamentRepository {
             GROUP BY p.id,p.display_name,p.initial_name ORDER BY
             """+order+" DESC,2,p.id LIMIT 100",
             (r,i)->new Tournament.PlayerRanking(r.getObject("id",UUID.class),r.getString("initial_name"),r.getLong("played"),r.getLong("raid_points"),r.getLong("tackle_points"),r.getString("team_name")),
-            tournamentId,tournamentId,LEADERBOARD_MIN_TEAMS,LEADERBOARD_MIN_COMPLETED,tournamentId);
+            tournamentId,tournamentId,tournamentId);
     }
     /**
      * Unfinished matches anyone may watch (same rule as the live view: a tournament fixture or a published
@@ -79,11 +74,12 @@ public class TournamentRepository {
             WHERE m.removed_at IS NULL AND NOT m.practice AND m.projection->>'status'<>'COMPLETED'
                 AND m.updated_at>now()-interval '6 hours'
                 AND (f.id IS NOT NULL OR EXISTS(SELECT 1 FROM public_scorecards s WHERE s.match_id=m.id AND s.published))
+                AND NOT """ + CountingRules.testMatch("m") + " AND (t.id IS NULL OR NOT " + CountingRules.testTournament("t") + ")" + """
             ORDER BY m.updated_at DESC LIMIT 50
             """,(r,i)->new Tournament.LiveMatch(r.getObject("id",UUID.class),r.getObject("tournament_id",UUID.class),r.getString("tournament_name"),
                 r.getString("team_a"),r.getString("team_b"),r.getInt("score_a"),r.getInt("score_b"),r.getString("status"),r.getTimestamp("updated_at").toInstant()));
     }
-    /** Players with a public page (see publicPlayer) whose name contains the search; best scorers first. */
+    /** Players with a public page (see publicPlayer) whose name contains the search; best scorers first. Same matches as the profile stats. */
     public List<Tournament.PlayerRanking> searchPlayers(String search) {
         return jdbc.query("""
             SELECT p.id,COALESCE(p.display_name,p.initial_name) AS name,count(DISTINCT m.id) AS played,
@@ -91,16 +87,14 @@ public class TournamentRepository {
                 COALESCE(sum((player.value->>'tacklePoints')::bigint),0) AS tackle_points,
                 (array_agg(team.value->>'name' ORDER BY m.updated_at DESC))[1] AS team_name
             FROM match_player_links l JOIN player_profiles p ON p.id=l.profile_id JOIN matches m ON m.id=l.match_id
-            JOIN tournament_fixtures f ON f.match_id=m.id
             CROSS JOIN LATERAL jsonb_array_elements(m.projection->'teams') AS team(value)
             CROSS JOIN LATERAL jsonb_array_elements(team.value->'players') AS player(value)
-            WHERE player.value->>'id'=l.local_player_id::text AND m.projection->>'status'='COMPLETED'
-                AND NOT m.practice AND m.removed_at IS NULL
+            WHERE player.value->>'id'=l.local_player_id::text AND """ + com.raidzon.account.repository.AccountRepository.COUNTED + """
                 AND position(lower(?) in lower(COALESCE(p.display_name,p.initial_name)))>0
             GROUP BY p.id,p.display_name,p.initial_name ORDER BY sum((player.value->>'raidPoints')::bigint+(player.value->>'tacklePoints')::bigint) DESC,2,p.id LIMIT 20
             """,(r,i)->new Tournament.PlayerRanking(r.getObject("id",UUID.class),r.getString("name"),r.getLong("played"),r.getLong("raid_points"),r.getLong("tackle_points"),r.getString("team_name")),search);
     }
-    /** Same rows as the per-tournament leaderboards: completed tournament matches, never practice or removed. */
+    /** A player's public stats: the same matches as their profile (AccountRepository.COUNTED), grouped by tournament. */
     public Tournament.PublicPlayer publicPlayer(UUID playerId) {
         var tournaments=jdbc.query("""
             SELECT t.id,t.name,t.starts_on,count(DISTINCT m.id) AS played,
@@ -111,8 +105,7 @@ public class TournamentRepository {
             JOIN tournament_fixtures f ON f.match_id=m.id JOIN tournaments t ON t.id=f.tournament_id
             CROSS JOIN LATERAL jsonb_array_elements(m.projection->'teams') AS team(value)
             CROSS JOIN LATERAL jsonb_array_elements(team.value->'players') AS player(value)
-            WHERE l.profile_id=? AND player.value->>'id'=l.local_player_id::text AND m.projection->>'status'='COMPLETED'
-                AND NOT m.practice AND m.removed_at IS NULL
+            WHERE l.profile_id=? AND player.value->>'id'=l.local_player_id::text AND """ + com.raidzon.account.repository.AccountRepository.COUNTED + """
             GROUP BY t.id,t.name,t.starts_on ORDER BY t.starts_on DESC,t.id
             """,(r,i)->new Tournament.PlayerTournament(r.getObject("id",UUID.class),r.getString("name"),r.getObject("starts_on",java.time.LocalDate.class),
                 r.getString("team_name"),r.getLong("played"),r.getLong("raid_points"),r.getLong("tackle_points")),playerId);

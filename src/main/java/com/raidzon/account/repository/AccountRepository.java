@@ -13,18 +13,21 @@ public class AccountRepository {
     static final int SUPER_TEN = 10, HIGH_FIVE = 5;
     private static final java.time.Duration NAME_CHANGE_INTERVAL = java.time.Duration.ofDays(30);
     /**
-     * Which linked matches count on a player's profile: completed (an unfinished match adds nothing),
-     * not practice, not removed, and not self-scored. A match is self-scored when the account that
-     * created or scored it is also one of its players; then it counts for nobody in it.
+     * Which linked matches count in a player's stats (profile, public player page, player search): completed
+     * (an unfinished match adds nothing), not practice, not removed, not self-scored, and a fixture of a tournament
+     * with at least 4 teams and 3 completed matches (CountingRules); friendly matches never count. Exception: matches
+     * already on the server before V23 (legacy_stats) keep counting as they did, friendlies included. A match is
+     * self-scored when the account that created or scored it is also one of its players; then it counts for nobody in it.
      * Expects aliases l (match_player_links) and m (matches).
      * Starts with a space: text blocks drop the trailing space of the line it is appended to.
      */
-    static final String COUNTED = " " + """
+    public static final String COUNTED = " " + """
         m.projection->>'status'='COMPLETED' AND NOT m.practice AND m.removed_at IS NULL AND NOT EXISTS (
             SELECT 1 FROM match_player_links sl JOIN player_profiles sp ON sp.id=sl.profile_id
             JOIN user_accounts sa ON sa.phone=sp.phone
             WHERE sl.match_id=m.id AND sa.id IN (m.owner_account_id, m.scoring_account_id))
-        """;
+        """ + " AND ((m.legacy_stats AND NOT " + com.raidzon.tournament.repository.CountingRules.testMatch("m") + ") OR "
+        + com.raidzon.tournament.repository.CountingRules.inEligibleTournament("m") + ") ";
     private final JdbcTemplate jdbc;
     public AccountRepository(JdbcTemplate jdbc) { this.jdbc = jdbc; }
     @org.springframework.transaction.annotation.Transactional
