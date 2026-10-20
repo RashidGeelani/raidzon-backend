@@ -20,7 +20,7 @@ public class SitemapController {
     @GetMapping(value="/api/v1/public/sitemap.xml",produces="application/xml")
     public String sitemap(){
         var xml=new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n");
-        for(String page:new String[]{"/","/help","/privacy"})xml.append("<url><loc>").append(site).append(page).append("</loc></url>\n");
+        for(String page:new String[]{"/","/help","/privacy","/guide","/guide/kabaddi-rules","/guide/how-to-score-kabaddi","/guide/kabaddi-points-table","/guide/run-a-kabaddi-tournament"})xml.append("<url><loc>").append(site).append(page).append("</loc></url>\n");
         // Matches: same visibility rule as the public live view (tournament fixture or published scorecard, never removed
         // or practice), and only finished ones with at least MIN_RAIDS raids: short or unfinished (often test) matches
         // are thin pages, and the frontend marks them noindex (api/page.js MIN_RAIDS). Scorecards repeat /watch, so
