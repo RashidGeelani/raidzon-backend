@@ -366,6 +366,20 @@ class AuthHttpTest {
         postJson("/public/installs",Map.of("installId",id,"source","other"),null,422);
         postJson("/public/installs",Map.of("installId","short","source","appinstalled"),null,422);
     }
+    @Test void installPingsAreLimitedPerIpEvenWithNewInstallIds() throws Exception {
+        org.springframework.test.web.servlet.request.RequestPostProcessor fromIp=request->{request.setRemoteAddr("203.0.113.77");return request;};
+        for(int i=0;i<20;i++)
+            http.perform(post("/api/v1/public/installs").with(fromIp).contentType("application/json")
+                .content(json.writeValueAsBytes(Map.of("installId","inst_"+UUID.randomUUID().toString().replace("-",""),"source","appinstalled"))))
+                .andExpect(status().isOk());
+        http.perform(post("/api/v1/public/installs").with(fromIp).contentType("application/json")
+            .content(json.writeValueAsBytes(Map.of("installId","inst_"+UUID.randomUUID().toString().replace("-",""),"source","appinstalled"))))
+            .andExpect(status().isTooManyRequests()).andExpect(jsonPath("$.code").value("RATE_LIMITED"));
+        // Another network is unaffected.
+        http.perform(post("/api/v1/public/installs").with(request->{request.setRemoteAddr("203.0.113.78");return request;}).contentType("application/json")
+            .content(json.writeValueAsBytes(Map.of("installId","inst_"+UUID.randomUUID().toString().replace("-",""),"source","appinstalled"))))
+            .andExpect(status().isOk());
+    }
     @Test void lastSeenIsWrittenAtMostHourly() throws Exception {
         String token=login(phone(),UUID.randomUUID(),secret());
         UUID account=auth.authenticate(token).accountId();

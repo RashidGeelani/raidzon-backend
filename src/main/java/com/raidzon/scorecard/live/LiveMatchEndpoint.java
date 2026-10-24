@@ -11,6 +11,7 @@ import java.util.UUID;
 public class LiveMatchEndpoint extends Endpoint {
     private final LiveMatchHub hub;
     private UUID matchId;
+    private String ip;
     LiveMatchEndpoint(LiveMatchHub hub) { this.hub = hub; }
 
     @Override public void onOpen(Session session, EndpointConfig config) {
@@ -19,8 +20,9 @@ public class LiveMatchEndpoint extends Endpoint {
         session.setMaxTextMessageBufferSize(256);
         session.setMaxIdleTimeout(90_000);
         session.addMessageHandler(String.class, (MessageHandler.Whole<String>) ignored -> {});
-        hub.open(matchId, session);
+        ip = String.valueOf(config.getUserProperties().getOrDefault(LiveMatchHub.CLIENT_IP, "unknown"));
+        hub.open(matchId, ip, session);
     }
-    @Override public void onClose(Session session, CloseReason reason) { if (matchId != null) hub.closed(matchId, session); }
-    @Override public void onError(Session session, Throwable error) { if (matchId != null) hub.closed(matchId, session); }
+    @Override public void onClose(Session session, CloseReason reason) { if (matchId != null) hub.closed(matchId, ip, session); }
+    @Override public void onError(Session session, Throwable error) { if (matchId != null) hub.closed(matchId, ip, session); }
 }

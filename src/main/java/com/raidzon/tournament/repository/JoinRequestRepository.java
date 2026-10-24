@@ -68,7 +68,8 @@ public class JoinRequestRepository {
     private static final String SELECT = """
         SELECT q.id, q.tournament_id, t.name AS tournament_name, q.team_id, tm.name AS team_name, tm.city AS team_city,
                (SELECT count(*) FROM team_members m WHERE m.team_id = q.team_id AND m.left_at IS NULL) AS squad_size,
-               ARRAY(SELECT COALESCE(p.display_name, m.squad_name) FROM team_members m JOIN player_profiles p ON p.id = m.profile_id
+               ARRAY(SELECT """ + com.raidzon.team.repository.TeamRepository.SHOWN_NAME + """
+                     FROM team_members m JOIN player_profiles p ON p.id = m.profile_id
                      WHERE m.team_id = q.team_id AND m.left_at IS NULL ORDER BY m.joined_at, m.id) AS players,
                (SELECT COALESCE(p.display_name, p.initial_name) FROM user_accounts u JOIN player_profiles p ON p.phone = u.phone
                 WHERE u.id = q.requested_by) AS requested_by_name,
