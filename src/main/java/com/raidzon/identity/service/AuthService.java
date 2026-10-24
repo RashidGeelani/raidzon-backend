@@ -85,6 +85,18 @@ public final class AuthService {
         }
         return new Challenge(id,now+300_000,60);
     }
+    /** Counts one request for scope+IP in an hourly window (one atomic statement); false once max is passed. */
+    public boolean allow(String scope,String remoteAddress,int max) {
+        long now=clock.millis();
+        Integer count=jdbc.queryForObject("""
+            INSERT INTO auth_rate_limits(key,window_start,last_request,requests) VALUES (?,?,?,1)
+            ON CONFLICT (key) DO UPDATE SET
+              requests=CASE WHEN ?-auth_rate_limits.window_start>=3600000 THEN 1 ELSE auth_rate_limits.requests+1 END,
+              window_start=CASE WHEN ?-auth_rate_limits.window_start>=3600000 THEN ? ELSE auth_rate_limits.window_start END,
+              last_request=?
+            RETURNING requests""",Integer.class,scope+":"+mac(remoteAddress),now,now,now,now,now,now);
+        return count!=null && count<=max;
+    }
     private void limit(String key,int max,long cooldown,long now) {
         jdbc.update("INSERT INTO auth_rate_limits(key,window_start,last_request,requests) VALUES (?,?,?,0) ON CONFLICT DO NOTHING",key,now,0L);
         var row=jdbc.queryForMap("SELECT * FROM auth_rate_limits WHERE key=? FOR UPDATE",key);

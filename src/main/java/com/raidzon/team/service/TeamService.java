@@ -1,6 +1,8 @@
 package com.raidzon.team.service;
 
 import com.raidzon.identity.service.AuthFailure;
+import com.raidzon.notification.dto.Notification;
+import com.raidzon.notification.repository.NotificationRepository;
 import com.raidzon.team.dto.Team;
 import com.raidzon.team.repository.TeamRepository;
 import org.springframework.context.annotation.Profile;
@@ -12,16 +14,55 @@ import java.util.UUID;
 
 /**
  * Reusable teams. Owner: everything. Manager: team details, squad and leadership.
- * Coach: read the squad (and pick match-day lineups on their own device). Mutations lock the team row.
+ * Coach: read the squad (and pick match-day lineups on their own device). Player: read the squad, no phones.
+ * Players and staff added by phone are invited; their role applies only after they accept. Mutations lock the team row.
  */
 @Service @Profile("postgres")
 public class TeamService {
     private static final Set<String> PLAYING_ROLES = Set.of("RAIDER", "DEFENDER", "ALL_ROUNDER");
     private static final Set<String> STAFF_ROLES = Set.of("MANAGER", "COACH");
     private final TeamRepository teams;
-    public TeamService(TeamRepository teams) { this.teams = teams; }
+    private final NotificationRepository notifications;
+    public TeamService(TeamRepository teams, NotificationRepository notifications) { this.teams = teams; this.notifications = notifications; }
 
     public List<Team.Summary> mine(UUID account) { return teams.mine(account); }
+
+    public List<Team.Invitation> invitations(UUID account) { return teams.invitations(account); }
+
+    /** Accepting twice is a no-op; with nothing to accept and no role the team stays hidden. */
+    @Transactional
+    public Team.Detail accept(UUID teamId, UUID account) {
+        teams.lock(teamId);
+        UUID profile = teams.profileOf(account);
+        if (profile != null && teams.accept(teamId, profile) > 0) teams.touch(teamId);
+        return teams.detail(teamId, access(teamId, account));
+    }
+
+    /** Declining removes the invitation and tells the owner. Repeats are no-ops. */
+    @Transactional
+    public List<Team.Invitation> decline(UUID teamId, UUID account) {
+        teams.lock(teamId);
+        UUID profile = teams.profileOf(account);
+        var invite = teams.invitations(account).stream().filter(i -> i.teamId().equals(teamId)).findFirst();
+        if (profile != null && teams.depart(teamId, profile, false) > 0) {
+            teams.touch(teamId);
+            var head = teams.head(teamId);
+            notifications.notify(head.owner(), Notification.Kind.TEAM_INVITE_DECLINED,
+                    invite.map(Team.Invitation::squadName).orElse("A player") + " declined to join " + head.name(), null, null, teamId, null);
+        }
+        return teams.invitations(account);
+    }
+
+    /** Players and staff can leave a team they joined; the owner cannot. Leaving twice is a no-op. */
+    @Transactional
+    public List<Team.Summary> leave(UUID teamId, UUID account) {
+        teams.lock(teamId);
+        if (teams.role(teamId, account) == Team.Role.OWNER)
+            throw new AuthFailure(403, "TEAM_FORBIDDEN", "The owner cannot leave the team. Archive it instead.");
+        UUID profile = teams.profileOf(account);
+        if (profile != null && teams.depart(teamId, profile, true) > 0) teams.touch(teamId);
+        return teams.mine(account);
+    }
 
     @Transactional(readOnly = true)
     public Team.Detail detail(UUID teamId, UUID account) {
@@ -71,7 +112,7 @@ public class TeamService {
         if (teams.activeMembers(teamId) >= Team.MAX_SQUAD)
             throw conflict("SQUAD_FULL", "A squad can have up to " + Team.MAX_SQUAD + " players.");
         if (jersey != null && teams.jerseyTaken(teamId, jersey, input.id())) throw conflict("JERSEY_TAKEN", "Jersey " + jersey + " is already taken.");
-        teams.addMember(input.id(), teamId, profile, name, jersey, playingRole);
+        teams.addMember(input.id(), teamId, profile, name, jersey, playingRole, invite(teamId, phone, account));
         teams.touch(teamId);
         return teams.detail(teamId, role);
     }
@@ -112,20 +153,35 @@ public class TeamService {
         var role = editable(teamId, account, true);
         String staffRole = staffRole(input.role());
         String name = name(input.name(), 70, "staff name");
-        UUID profile = teams.profileFor(phone(input.phone()), name);
+        String phone = phone(input.phone());
+        UUID profile = teams.profileFor(phone, name);
         // Re-adding someone already in that role is a no-op, even when the staff list is full.
-        if (!teams.hasStaff(teamId, profile, staffRole) && teams.staffCount(teamId) >= Team.MAX_STAFF)
+        if (teams.hasStaff(teamId, profile, staffRole)) return teams.detail(teamId, role);
+        if (teams.staffCount(teamId) >= Team.MAX_STAFF)
             throw conflict("STAFF_FULL", "A team can have up to " + Team.MAX_STAFF + " staff.");
-        if (teams.addStaff(teamId, profile, staffRole, name)) teams.touch(teamId);
+        if (teams.addStaff(teamId, profile, staffRole, name, invite(teamId, phone, account))) teams.touch(teamId);
         return teams.detail(teamId, role);
     }
 
     @Transactional
     public Team.Detail removeStaff(UUID teamId, Team.StaffRemoval input, UUID account) {
         var role = editable(teamId, account, true);
-        required(input.profileId());
-        if (teams.removeStaff(teamId, input.profileId(), staffRole(input.role()))) teams.touch(teamId);
+        required(input.id());
+        if (teams.removeStaff(teamId, input.id())) teams.touch(teamId);
         return teams.detail(teamId, role);
+    }
+
+    /**
+     * Whether a new squad or staff row starts accepted: only when people add their own number.
+     * Otherwise the person with that phone (if they have signed up) is told; others see it after sign-up.
+     */
+    private boolean invite(UUID teamId, String phone, UUID actor) {
+        UUID invitee = teams.accountFor(phone);
+        if (actor.equals(invitee)) return true;
+        if (invitee != null)
+            notifications.notify(invitee, Notification.Kind.TEAM_INVITE, "You're invited to join " + teams.head(teamId).name(),
+                    "Open Teams to accept or decline.", null, teamId, null);
+        return false;
     }
 
     // ---- permissions ----
@@ -138,8 +194,8 @@ public class TeamService {
     private Team.Role editable(UUID teamId, UUID account, boolean ownerOnly) {
         var role = access(teamId, account);
         teams.lock(teamId);
-        if (ownerOnly ? role != Team.Role.OWNER : role == Team.Role.COACH)
-            throw new AuthFailure(403, "TEAM_FORBIDDEN", ownerOnly ? "Only the team owner can do this." : "Coaches can view the squad but not change it.");
+        if (ownerOnly ? role != Team.Role.OWNER : !role.manages())
+            throw new AuthFailure(403, "TEAM_FORBIDDEN", ownerOnly ? "Only the team owner can do this." : "Coaches and players can view the squad but not change it.");
         if (teams.archived(teamId)) throw conflict("TEAM_ARCHIVED", "This team is archived.");
         return role;
     }

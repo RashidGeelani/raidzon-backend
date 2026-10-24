@@ -157,7 +157,7 @@ public class TournamentService {
     private com.raidzon.team.repository.TeamRepository.Squad savedSquad(UUID savedTeam,UUID owner){
         var role=teams.role(savedTeam,owner);
         if(role==null)throw new com.raidzon.identity.service.AuthFailure(404,"TEAM_NOT_FOUND","Saved team not found.");
-        if(role==com.raidzon.team.dto.Team.Role.COACH)throw new com.raidzon.identity.service.AuthFailure(403,"TEAM_FORBIDDEN","Only the team's owner or manager can register it.");
+        if(!role.manages())throw new com.raidzon.identity.service.AuthFailure(403,"TEAM_FORBIDDEN","Only the team's owner or manager can register it.");
         return approvedSquad(savedTeam);
     }
     private com.raidzon.team.repository.TeamRepository.Squad approvedSquad(UUID savedTeam){

@@ -23,13 +23,18 @@ public class AppStatsController {
     private final AuthService auth;
     public AppStatsController(JdbcTemplate jdbc, AdminAccess admins, AuthService auth) { this.jdbc = jdbc; this.admins = admins; this.auth = auth; }
 
-    /** One row per install ID; repeats are ignored. Linked to the account when a valid session is sent. */
-    // ponytail: no per-IP limit, a spammer could inflate install counts; add one (auth_rate_limits) if numbers look off.
+    static final int INSTALLS_PER_IP_HOUR = 20;
+
+    /** One row per install ID; repeats are ignored. Linked to the account when a valid session is sent. Limited per client IP. */
     @PostMapping("/public/installs")
     public Map<String, Boolean> install(@RequestBody InstallInput input, @RequestHeader(value = "Authorization", required = false) String authorization,
-                                        @RequestHeader(value = "User-Agent", required = false) String userAgent) {
+                                        @RequestHeader(value = "User-Agent", required = false) String userAgent,
+                                        jakarta.servlet.http.HttpServletRequest request) {
         if (input == null || input.installId() == null || !input.installId().matches("[A-Za-z0-9_-]{8,64}") || !SOURCES.contains(input.source()))
             throw new IllegalArgumentException("Invalid install.");
+        // getRemoteAddr() is the real client IP (RemoteIpValve reads Render's X-Forwarded-For), so new install IDs can't dodge it.
+        if (!auth.allow("install-ip", request.getRemoteAddr(), INSTALLS_PER_IP_HOUR))
+            throw new AuthFailure(429, "RATE_LIMITED", "Too many installs from this network. Try again later.");
         UUID user = null;
         if (authorization != null && authorization.startsWith("Bearer ")) {
             try { user = auth.authenticate(authorization.substring(7)).accountId(); } catch (AuthFailure ignored) { /* count it anonymously */ }

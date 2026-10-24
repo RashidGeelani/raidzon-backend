@@ -44,6 +44,11 @@ public class LiveMatchHub implements ServletContextAware, DisposableBean {
     public static final String PATH = "/ws/matches/{matchId}";
     static final int MAX_PER_MATCH = 2000;
     static final int MAX_TOTAL = 5000;
+    /** One phone or browser needs a few sockets at most; this stops one client from using up the caps. */
+    static final int MAX_PER_IP = 20;
+    static final String UNAVAILABLE = "{\"type\":\"unavailable\"}";
+    /** Endpoint user property holding the client IP read during the handshake. */
+    static final String CLIENT_IP = "raidzon.clientIp";
     private static final Logger log = LoggerFactory.getLogger(LiveMatchHub.class);
 
     private static final String CHANNEL = "raidzon:live:";
@@ -55,6 +60,7 @@ public class LiveMatchHub implements ServletContextAware, DisposableBean {
     /** Whether the last view built for a watched match was public (fast pushes are only sent then). */
     private final Map<UUID, Boolean> visible = new ConcurrentHashMap<>();
     private final AtomicInteger total = new AtomicInteger();
+    private final Map<String, Integer> perIp = new java.util.HashMap<>(); // guarded by this
     private final ExecutorService sender = Executors.newVirtualThreadPerTaskExecutor();
     private final ScheduledExecutorService keepalive = Executors.newSingleThreadScheduledExecutor(Thread.ofVirtual().factory());
 
@@ -100,31 +106,72 @@ public class LiveMatchHub implements ServletContextAware, DisposableBean {
                 .configurator(new ServerEndpointConfig.Configurator() {
                     @Override public <T> T getEndpointInstance(Class<T> type) { return type.cast(new LiveMatchEndpoint(hub)); }
                     @Override public boolean checkOrigin(String origin) { return origin == null || allowedOrigins.contains(origin); }
-                    @Override public void modifyHandshake(ServerEndpointConfig config, HandshakeRequest request, HandshakeResponse response) {}
+                    // Tomcat gives each handshake its own config copy, so this property is per connection.
+                    @Override public void modifyHandshake(ServerEndpointConfig config, HandshakeRequest request, HandshakeResponse response) {
+                        config.getUserProperties().put(CLIENT_IP, clientIp(request.getHeaders().get("X-Forwarded-For")));
+                    }
                 }).build());
         } catch (DeploymentException error) {
             log.warn("Could not register live match WebSocket endpoint.", error);
         }
     }
 
-    /** Called when a watcher connects. Sends the current view right away. */
-    void open(UUID matchId, Session session) {
-        var set = watchers.computeIfAbsent(matchId, id -> ConcurrentHashMap.newKeySet());
-        if (total.get() >= MAX_TOTAL || set.size() >= MAX_PER_MATCH) {
+    /**
+     * The client's IP as Tomcat's RemoteIpValve would see it: the right-most X-Forwarded-For entry that is
+     * not an internal proxy (Render appends the real peer, so a client cannot spoof it by sending its own header).
+     */
+    static String clientIp(java.util.List<String> forwardedFor) {
+        if (forwardedFor == null || forwardedFor.isEmpty()) return "unknown";
+        var hops = String.join(",", forwardedFor).split(",");
+        String ip = "unknown";
+        for (int i = hops.length - 1; i >= 0; i--) {
+            ip = hops[i].strip();
+            if (!internal(ip)) break;
+        }
+        return ip.isEmpty() ? "unknown" : ip;
+    }
+    private static boolean internal(String ip) {
+        if (!ip.matches("[0-9a-fA-F:.]{2,45}")) return false; // only literal addresses, never a DNS lookup
+        try {
+            var address = java.net.InetAddress.getByName(ip);
+            byte[] b = address.getAddress();
+            boolean cgnat = b.length == 4 && (b[0] & 0xff) == 100 && (b[1] & 0xc0) == 64; // 100.64.0.0/10
+            boolean uniqueLocal = b.length == 16 && (b[0] & 0xfe) == 0xfc;              // fc00::/7
+            return address.isLoopbackAddress() || address.isSiteLocalAddress() || address.isLinkLocalAddress() || cgnat || uniqueLocal;
+        } catch (java.net.UnknownHostException invalid) { return false; }
+    }
+
+    /** Called when a watcher connects. Sends the current view right away, or closes when a cap is reached. */
+    void open(UUID matchId, String ip, Session session) {
+        if (!reserve(matchId, ip, session)) {
             close(session, CloseReason.CloseCodes.TRY_AGAIN_LATER, "Too many watchers. Try again shortly.");
             return;
         }
-        if (set.add(session)) total.incrementAndGet();
         sender.submit(() -> send(session, message(matchId, false)));
     }
 
-    void closed(UUID matchId, Session session) {
+    /** Checks every cap and registers the watcher in one step, so racing connects can't overshoot or leave empty entries. */
+    // ponytail: one lock for connects/disconnects only (sends don't take it); stripe per match if connects ever contend.
+    synchronized boolean reserve(UUID matchId, String ip, Session session) {
+        var set = watchers.get(matchId);
+        if (total.get() >= MAX_TOTAL || (set != null && set.size() >= MAX_PER_MATCH) || perIp.getOrDefault(ip, 0) >= MAX_PER_IP) return false;
+        if (set == null) watchers.put(matchId, set = ConcurrentHashMap.newKeySet());
+        if (set.add(session)) { total.incrementAndGet(); perIp.merge(ip, 1, Integer::sum); }
+        return true;
+    }
+
+    synchronized void closed(UUID matchId, String ip, Session session) {
         var set = watchers.get(matchId);
         if (set != null && set.remove(session)) {
             total.decrementAndGet();
-            if (set.isEmpty() && watchers.remove(matchId, set)) visible.remove(matchId);
+            perIp.computeIfPresent(ip, (key, count) -> count <= 1 ? null : count - 1);
+            if (set.isEmpty()) { watchers.remove(matchId); visible.remove(matchId); }
         }
     }
+
+    int total() { return total.get(); }
+    synchronized int fromIp(String ip) { return perIp.getOrDefault(ip, 0); }
+    boolean tracked(UUID matchId) { return watchers.containsKey(matchId); }
 
     /** Push the latest view of a match to everyone watching it. Never blocks the caller. */
     public void publish(UUID matchId) {
@@ -180,7 +227,7 @@ public class LiveMatchHub implements ServletContextAware, DisposableBean {
             return text;
         } catch (AuthFailure notPublic) {
             visible.remove(matchId);
-            return "{\"type\":\"unavailable\"}";
+            return UNAVAILABLE;
         } catch (Exception error) {
             log.warn("Live view for {} could not be built.", matchId, error);
             return "{\"type\":\"error\"}";
@@ -196,7 +243,9 @@ public class LiveMatchHub implements ServletContextAware, DisposableBean {
         synchronized (session) {
             if (!session.isOpen()) return;
             try { session.getBasicRemote().sendText(text); }
-            catch (IOException | IllegalStateException error) { close(session, CloseReason.CloseCodes.GOING_AWAY, "Send failed"); }
+            catch (IOException | IllegalStateException error) { close(session, CloseReason.CloseCodes.GOING_AWAY, "Send failed"); return; }
+            // Nothing more will come for a private or missing match; the app polls and reconnects if it becomes public.
+            if (UNAVAILABLE.equals(text)) close(session, CloseReason.CloseCodes.NORMAL_CLOSURE, "Match not available");
         }
     }
 

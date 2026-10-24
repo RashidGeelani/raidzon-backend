@@ -127,7 +127,7 @@ public class JoinRequestService {
     private void manager(UUID teamId, UUID actor) {
         var role = teams.role(teamId, actor);
         if (role == null) throw new AuthFailure(404, "TEAM_NOT_FOUND", "Team not found.");
-        if (role == Team.Role.COACH) throw new AuthFailure(403, "TEAM_FORBIDDEN", "Only the team's owner or manager can do this.");
+        if (!role.manages()) throw new AuthFailure(403, "TEAM_FORBIDDEN", "Only the team's owner or manager can do this.");
     }
     private TeamRepository.Squad eligibleSquad(UUID teamId) {
         var squad = teams.squad(teamId);

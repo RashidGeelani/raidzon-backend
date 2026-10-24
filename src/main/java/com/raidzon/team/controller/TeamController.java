@@ -18,6 +18,22 @@ public class TeamController {
     public List<Team.Summary> mine(@RequestAttribute("identity") AuthIdentity actor) {
         return teams.mine(actor.accountId());
     }
+    @GetMapping("/invitations")
+    public List<Team.Invitation> invitations(@RequestAttribute("identity") AuthIdentity actor) {
+        return teams.invitations(actor.accountId());
+    }
+    @PostMapping("/{id}/invitations/accept")
+    public Team.Detail accept(@PathVariable UUID id, @RequestAttribute("identity") AuthIdentity actor) {
+        return teams.accept(id, actor.accountId());
+    }
+    @PostMapping("/{id}/invitations/decline")
+    public List<Team.Invitation> decline(@PathVariable UUID id, @RequestAttribute("identity") AuthIdentity actor) {
+        return teams.decline(id, actor.accountId());
+    }
+    @PostMapping("/{id}/leave")
+    public List<Team.Summary> leave(@PathVariable UUID id, @RequestAttribute("identity") AuthIdentity actor) {
+        return teams.leave(id, actor.accountId());
+    }
     @PostMapping
     public Team.Detail create(@RequestBody Team.CreateInput input, @RequestAttribute("identity") AuthIdentity actor) {
         return teams.create(input, actor.accountId());
