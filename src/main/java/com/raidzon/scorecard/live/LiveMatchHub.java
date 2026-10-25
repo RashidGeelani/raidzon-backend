@@ -244,8 +244,13 @@ public class LiveMatchHub implements ServletContextAware, DisposableBean {
             if (!session.isOpen()) return;
             try { session.getBasicRemote().sendText(text); }
             catch (IOException | IllegalStateException error) { close(session, CloseReason.CloseCodes.GOING_AWAY, "Send failed"); return; }
-            // Nothing more will come for a private or missing match; the app polls and reconnects if it becomes public.
-            if (UNAVAILABLE.equals(text)) close(session, CloseReason.CloseCodes.NORMAL_CLOSURE, "Match not available");
+        }
+        // Nothing more will come for a private or missing match; the app polls and reconnects if it becomes public.
+        // Closed outside the per-session lock and logged on failure: on Render the close inside the lock hung until
+        // Tomcat's 20s send timeout without a trace.
+        if (UNAVAILABLE.equals(text)) {
+            try { session.close(new CloseReason(CloseReason.CloseCodes.NORMAL_CLOSURE, "Match not available")); }
+            catch (IOException | RuntimeException error) { log.warn("Closing an unavailable watcher failed: {}", error.toString()); }
         }
     }
 

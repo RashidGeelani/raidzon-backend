@@ -82,6 +82,16 @@ class LiveMatchHubTest {
         verify(s, timeout(2000)).close(argThat(r -> r.getCloseCode() == CloseReason.CloseCodes.NORMAL_CLOSURE));
     }
 
+    @Test void unavailableCloseHappensOutsideTheSessionLock() throws Exception {
+        UUID match = UUID.randomUUID();
+        when(views.read(match)).thenThrow(new AuthFailure(404, "MATCH_NOT_FOUND", "Not found."));
+        var s = session();
+        var heldLock = new java.util.concurrent.CompletableFuture<Boolean>();
+        doAnswer(a -> { heldLock.complete(Thread.holdsLock(s)); return null; }).when(s).close(any(CloseReason.class));
+        hub.open(match, "198.51.100.6", s);
+        assertFalse(heldLock.get(2, java.util.concurrent.TimeUnit.SECONDS), "close must not run while holding the session lock");
+    }
+
     @Test void clientIpIsTheRightMostNonInternalHop() {
         assertEquals("203.0.113.9", LiveMatchHub.clientIp(List.of("203.0.113.9")));
         assertEquals("203.0.113.9", LiveMatchHub.clientIp(List.of("1.1.1.1, 203.0.113.9")), "a spoofed left-most entry is ignored");
