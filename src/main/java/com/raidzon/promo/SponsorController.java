@@ -5,6 +5,7 @@ import com.raidzon.identity.service.AuthFailure;
 import com.raidzon.identity.service.AuthService;
 import com.raidzon.moderation.AdminAccess;
 import com.raidzon.tournament.repository.TournamentRepository;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.CacheControl;
 import org.springframework.http.MediaType;
@@ -64,10 +65,11 @@ public class SponsorController {
     }
 
     @GetMapping("/public/sponsors/{sponsorId}/logo")
-    public ResponseEntity<byte[]> logo(@PathVariable UUID sponsorId) {
+    public ResponseEntity<byte[]> logo(@PathVariable UUID sponsorId, HttpServletResponse response) {
         var logo = sponsors.logo(sponsorId);
+        // setHeader replaces AuthFilter's "no-store"; ResponseEntity.cacheControl would only add a second value.
+        response.setHeader("Cache-Control", CacheControl.maxAge(Duration.ofDays(365)).cachePublic().immutable().getHeaderValue());
         return ResponseEntity.ok()
-            .cacheControl(CacheControl.maxAge(Duration.ofDays(365)).cachePublic().immutable())
             .contentType(MediaType.parseMediaType(logo.contentType()))
             .header("X-Content-Type-Options", "nosniff")
             .body(logo.bytes());

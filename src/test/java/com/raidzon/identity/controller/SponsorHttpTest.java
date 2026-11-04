@@ -96,9 +96,9 @@ class SponsorHttpTest {
         send("/tournaments/" + t + "/sponsors", script, owner, 422);
         var svg = sponsor(UUID.randomUUID(), "X", "PARTNER"); svg.put("logo", Base64.getEncoder().encodeToString("<svg/>".getBytes()));
         send("/tournaments/" + t + "/sponsors", svg, owner, 422);
-        // A sponsor ID from another tournament can't be taken over.
+        // A sponsor ID from another tournament can't be taken over (409 ID_REUSED, like every reused ID).
         UUID other = tournament(owner);
-        send("/tournaments/" + other + "/sponsors", sponsor(title, "Moved", "PARTNER"), owner, 422);
+        send("/tournaments/" + other + "/sponsors", sponsor(title, "Moved", "PARTNER"), owner, 409);
     }
 
     @Test void publicTournamentListsSponsorsAndServesLogosWithLongCaching() throws Exception {
