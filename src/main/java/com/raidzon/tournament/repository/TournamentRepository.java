@@ -12,7 +12,8 @@ import java.sql.Timestamp;
 @Repository @Profile("postgres")
 public class TournamentRepository {
     private final JdbcTemplate jdbc;
-    public TournamentRepository(JdbcTemplate jdbc) { this.jdbc=jdbc; }
+    private final com.raidzon.promo.Sponsors sponsors;
+    public TournamentRepository(JdbcTemplate jdbc, com.raidzon.promo.Sponsors sponsors) { this.jdbc=jdbc; this.sponsors=sponsors; }
     private static final org.springframework.jdbc.core.RowMapper<Tournament> ROW = (r,i) -> new Tournament(
         r.getObject("id",UUID.class),r.getString("name"),r.getString("venue"),r.getDate("starts_on").toLocalDate(),r.getInt("half_minutes"),r.getInt("raid_seconds"));
     public List<Tournament> list(UUID owner) {
@@ -127,7 +128,7 @@ public class TournamentRepository {
             """,(org.springframework.jdbc.core.RowCallbackHandler) r->ownNames.put(r.getString("phone"),r.getString("display_name")),id);
         return new Tournament.PublicDetail(detail.tournament(),detail.teams().stream().map(team ->
             new Tournament.PublicTeam(team.id(),team.name(),team.roster().stream().map(player->ownNames.getOrDefault(player.phone(),player.name())).toList())).toList(),
-            detail.fixtures(),detail.standings(),detail.registrationOpen(),detail.format(),detail.groups(),detail.championId());
+            detail.fixtures(),detail.standings(),detail.registrationOpen(),detail.format(),detail.groups(),detail.championId(),sponsors.list(id));
     }
     /** True when this tournament team was added by approving a team's join request. */
     public boolean joinedByRequest(UUID tournamentId, UUID tournamentTeamId) {

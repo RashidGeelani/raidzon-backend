@@ -65,8 +65,9 @@ public record Tournament(UUID id, String name, String venue, LocalDate startsOn,
     public record Detail(Tournament tournament, List<Team> teams, List<Fixture> fixtures, List<Standing> standings, boolean registrationOpen,
                          Format format, List<Group> groups, UUID championId) {}
     public record PublicTeam(UUID id, String name, List<String> players) {}
+    /** sponsors: Title sponsor first, with logo URLs (see com.raidzon.promo.Sponsors). */
     public record PublicDetail(Tournament tournament, List<PublicTeam> teams, List<Fixture> fixtures, List<Standing> standings, boolean registrationOpen,
-                               Format format, List<Group> groups, UUID championId) {}
+                               Format format, List<Group> groups, UUID championId, List<com.raidzon.promo.Sponsors.Sponsor> sponsors) {}
     public record PlayerRanking(UUID playerId,String name,long matches,long raidPoints,long tacklePoints,String teamName) {}
     /** A player's public page: the same completed tournament matches the tournament leaderboards already show. */
     public record PublicPlayer(UUID playerId,String name,long matches,long raidPoints,long tacklePoints,List<PlayerTournament> tournaments) {}

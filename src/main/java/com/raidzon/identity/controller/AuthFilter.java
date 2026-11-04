@@ -25,8 +25,9 @@ public class AuthFilter extends OncePerRequestFilter {
         if(!path.startsWith("/api/v1/")){chain.doFilter(request,response);return;}
         response.setHeader("Cache-Control","no-store");
         if(PUBLIC.contains(path)||request.getMethod().equals("OPTIONS") ||
-            (request.getMethod().equals("POST") && path.equals("/api/v1/public/installs")) ||
-            (request.getMethod().equals("GET") && (path.matches("/api/v1/public/(?:scorecards|matches|players)/[0-9a-fA-F-]{36}") || path.equals("/api/v1/public/leaderboards") || path.equals("/api/v1/public/sitemap.xml") || path.equals("/api/v1/public/explore") || path.matches("/api/v1/public/tournaments(?:/[0-9a-fA-F-]{36})?")))){chain.doFilter(request,response);return;}
+            (request.getMethod().equals("POST") && (path.equals("/api/v1/public/installs") || path.equals("/api/v1/public/short-links"))) ||
+            (request.getMethod().equals("GET") && (path.matches("/api/v1/public/(?:scorecards|matches|players)/[0-9a-fA-F-]{36}") || path.equals("/api/v1/public/leaderboards") || path.equals("/api/v1/public/sitemap.xml") || path.equals("/api/v1/public/explore") || path.matches("/api/v1/public/tournaments(?:/[0-9a-fA-F-]{36})?")
+                || path.matches("/api/v1/public/sponsors/[0-9a-fA-F-]{36}/logo") || path.matches("/api/v1/public/short-links/[A-Za-z0-9]{1,12}")))){chain.doFilter(request,response);return;}
         try {
             String header=request.getHeader("Authorization");
             String token=header!=null&&header.startsWith("Bearer ")?header.substring(7):null;
