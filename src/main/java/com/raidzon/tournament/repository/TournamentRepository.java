@@ -113,8 +113,10 @@ public class TournamentRepository {
                 r.getString("team_name"),r.getLong("played"),r.getLong("raid_points"),r.getLong("tackle_points")),playerId);
         if(tournaments.isEmpty()) throw new AuthFailure(404,"PLAYER_NOT_FOUND","Player not found.");
         String name=jdbc.queryForObject("SELECT COALESCE(display_name,initial_name) FROM player_profiles WHERE id=?",String.class,playerId);
+        var milestones=com.raidzon.account.repository.AccountRepository.performance(jdbc,playerId,true);
         return new Tournament.PublicPlayer(playerId,name,tournaments.stream().mapToLong(Tournament.PlayerTournament::matches).sum(),
-            tournaments.stream().mapToLong(Tournament.PlayerTournament::raidPoints).sum(),tournaments.stream().mapToLong(Tournament.PlayerTournament::tacklePoints).sum(),tournaments);
+            tournaments.stream().mapToLong(Tournament.PlayerTournament::raidPoints).sum(),tournaments.stream().mapToLong(Tournament.PlayerTournament::tacklePoints).sum(),tournaments,
+            milestones.superRaids(),milestones.superTackles(),milestones.superTens(),milestones.highFives());
     }
     public Tournament.PublicDetail publicDetail(UUID id) {
         var owners=jdbc.queryForList("SELECT owner_account_id FROM tournaments WHERE id=?",UUID.class,id);
@@ -331,10 +333,15 @@ public class TournamentRepository {
     public List<String> playersOnOtherTeams(UUID tournamentId,UUID teamId,List<Tournament.RosterPlayer> players){
         if(players.isEmpty())return List.of();
         var phones=players.stream().map(Tournament.RosterPlayer::phone).toArray(String[]::new);
-        return jdbc.queryForList("""
-            SELECT r.name||' ('||t.name||')' FROM tournament_roster_players r JOIN tournament_teams t ON t.id=r.team_id
+        // Name the clash by the submitted player (name + jersey) so the organizer can find the row, then where they already play.
+        var submitted=players.stream().collect(java.util.stream.Collectors.toMap(Tournament.RosterPlayer::phone,p->p,(a,b)->a));
+        return jdbc.query("""
+            SELECT r.phone,r.name,t.name AS team FROM tournament_roster_players r JOIN tournament_teams t ON t.id=r.team_id
             WHERE r.tournament_id=? AND r.team_id<>? AND r.phone = ANY(?) ORDER BY r.name
-            """,String.class,tournamentId,teamId,phones);
+            """,(rs,i)->{
+                var mine=submitted.get(rs.getString("phone"));
+                return mine.name()+(mine.jersey()==null?"":" #"+mine.jersey())+" is on "+rs.getString("team")+" as "+rs.getString("name");
+            },tournamentId,teamId,phones);
     }
     /** Creates (or, on retry, confirms) a tournament team registered from a saved team, then copies its squad. */
     public void registerSavedTeam(UUID tournamentId,UUID id,UUID savedTeamId,String name,List<Tournament.RosterPlayer> players){
