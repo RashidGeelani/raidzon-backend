@@ -217,6 +217,79 @@ class AuthHttpTest {
         jdbc.update("UPDATE matches SET projection=jsonb_set(projection,'{status}','\"COMPLETED\"') WHERE id=?",matches[1]);
         postJson(link.formatted(fixtures[2]),Map.of("matchId",matches[2]),owner,200);
     }
+    /** Stores a scored raid as the match engine would: request intent and score components only (the stats read nothing else). */
+    void raidEvent(UUID match,int sequence,UUID event,String intent,String components) {
+        jdbc.update("""
+            INSERT INTO match_events(match_id,event_id,sequence,base_version,request_fingerprint,request,before_state,after_state,components,summary)
+            VALUES (?,?,?,?,?,?::jsonb,'{}'::jsonb,'{}'::jsonb,?::jsonb,'test')""",
+            match,event,sequence,sequence-1,"0".repeat(64),"{\"intent\":"+intent+"}",components);
+    }
+    @Test void publicPlayerPageCountsSuperRaidsSuperTacklesAndMilestones() throws Exception {
+        String owner=login(phone(),UUID.randomUUID(),secret());
+        UUID tournament=UUID.randomUUID(), fixture=UUID.randomUUID(), match=UUID.randomUUID();
+        UUID[] teams={UUID.randomUUID(),UUID.randomUUID()};
+        // Unique phones: player profiles are shared by phone across this class's tests.
+        String prefix="+91955"+String.format(Locale.ROOT,"%04d",new Random().nextInt(10_000));
+        java.util.function.IntFunction<List<Map<String,Object>>> roster=t->IntStream.range(0,7).mapToObj(i->Map.<String,Object>of("name","Milestone "+t+i,"phone",prefix+t+"0"+i)).toList();
+        postJson("/tournaments",Map.of("id",tournament,"name","Milestone Cup","venue","Main court","startsOn","2026-10-10","halfMinutes",20,"raidSeconds",30),owner,200);
+        for(int t=0;t<2;t++){
+            postJson("/tournaments/"+tournament+"/teams",Map.of("id",teams[t],"name","Side "+t),owner,200);
+            postJson("/tournaments/"+tournament+"/teams/"+teams[t]+"/roster",Map.of("players",roster.apply(t),"expectedRevision",0),owner,200);
+        }
+        postJson("/tournaments/"+tournament+"/fixtures",Map.of("id",fixture,"teamAId",teams[0],"teamBId",teams[1]),owner,200);
+        UUID raider=UUID.randomUUID(), other=UUID.randomUUID(), defender=UUID.randomUUID();
+        var sides=IntStream.range(0,2).mapToObj(t->Map.of("name","Side "+t,"players",IntStream.range(0,7).mapToObj(i->{
+            var player=new HashMap<String,Object>(roster.apply(t).get(i));
+            player.put("id",t==0&&i==0?raider:t==0&&i==1?other:t==1&&i==0?defender:UUID.randomUUID());return player;}).toList())).toList();
+        postJson("/matches",Map.of("matchId",match,"teams",sides,"firstTurn",0,"halfMinutes",20,"raidSeconds",30,"startedAt",1000),owner,201);
+        postJson("/tournaments/"+tournament+"/fixtures/"+fixture+"/match",Map.of("matchId",match),owner,200);
+        // Finished match: the raider has 12 raid points (Super 10), the defender 5 tackle points (High 5). legacy_stats lets one match count.
+        jdbc.update("""
+            UPDATE matches SET legacy_stats=true, projection=jsonb_set(jsonb_set(jsonb_set(projection,'{status}','"COMPLETED"'),
+                '{teams,0,players,0,raidPoints}','12'),'{teams,1,players,0,tacklePoints}','5') WHERE id=?""",match);
+        // Super raid: 3 points in one raid. An undone 3-point raid doesn't count.
+        raidEvent(match,1001,UUID.randomUUID(),"{\"type\":\"RAID\"}",
+            "[{\"kind\":\"TOUCH\",\"side\":0,\"points\":2,\"playerId\":\""+raider+"\"},{\"kind\":\"BONUS\",\"side\":0,\"points\":1,\"playerId\":\""+raider+"\"}]");
+        UUID undone=UUID.randomUUID();
+        raidEvent(match,1002,undone,"{\"type\":\"RAID\"}","[{\"kind\":\"TOUCH\",\"side\":0,\"points\":3,\"playerId\":\""+raider+"\"}]");
+        raidEvent(match,1003,UUID.randomUUID(),"{\"type\":\"UNDO\",\"targetEventId\":\""+undone+"\"}","[]");
+        // A 2-point raid is not a super raid.
+        raidEvent(match,1004,UUID.randomUUID(),"{\"type\":\"RAID\"}","[{\"kind\":\"TOUCH\",\"side\":0,\"points\":2,\"playerId\":\""+raider+"\"}]");
+        // Super tackle: the defender's tackle earns the extra point. A plain tackle doesn't count.
+        raidEvent(match,1005,UUID.randomUUID(),"{\"type\":\"RAID\"}",
+            "[{\"kind\":\"TACKLE\",\"side\":1,\"points\":1,\"playerId\":\""+defender+"\"},{\"kind\":\"SUPER_TACKLE_EXTRA\",\"side\":1,\"points\":1,\"playerId\":null}]");
+        raidEvent(match,1006,UUID.randomUUID(),"{\"type\":\"RAID\"}","[{\"kind\":\"TACKLE\",\"side\":1,\"points\":1,\"playerId\":\""+defender+"\"}]");
+        java.util.function.Function<UUID,JsonNode> page=local->{
+            try {
+                UUID profile=jdbc.queryForObject("SELECT profile_id FROM match_player_links WHERE match_id=? AND local_player_id=?",UUID.class,match,local);
+                return json.readTree(http.perform(get("/api/v1/public/players/"+profile)).andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+            } catch(Exception error){throw new RuntimeException(error);}
+        };
+        var raiderPage=page.apply(raider);
+        assertEquals(1,raiderPage.path("matches").asLong());
+        assertEquals(12,raiderPage.path("raidPoints").asLong());
+        assertEquals(1,raiderPage.path("superRaids").asLong());
+        assertEquals(1,raiderPage.path("superTens").asLong());
+        assertEquals(0,raiderPage.path("superTackles").asLong());
+        assertEquals(0,raiderPage.path("highFives").asLong());
+        var defenderPage=page.apply(defender);
+        assertEquals(1,defenderPage.path("superTackles").asLong());
+        assertEquals(1,defenderPage.path("highFives").asLong());
+        assertEquals(0,defenderPage.path("superRaids").asLong());
+        assertEquals(0,defenderPage.path("superTens").asLong());
+        // A player with no milestones still gets all four fields, as 0.
+        var quiet=page.apply(other);
+        for(String field:List.of("superRaids","superTackles","superTens","highFives")) assertEquals(0,quiet.path(field).asLong(),field);
+        assertTrue(quiet.has("superRaids"));
+        // A legacy friendly (no tournament) still counts on the profile but never on the public page.
+        UUID friendly=UUID.randomUUID();
+        postJson("/matches",Map.of("matchId",friendly,"teams",sides,"firstTurn",0,"halfMinutes",20,"raidSeconds",30,"startedAt",1000),owner,201);
+        jdbc.update("UPDATE matches SET legacy_stats=true, projection=jsonb_set(jsonb_set(projection,'{status}','\"COMPLETED\"'),'{teams,0,players,0,raidPoints}','15') WHERE id=?",friendly);
+        raidEvent(friendly,1001,UUID.randomUUID(),"{\"type\":\"RAID\"}","[{\"kind\":\"TOUCH\",\"side\":0,\"points\":4,\"playerId\":\""+raider+"\"}]");
+        raiderPage=page.apply(raider);
+        assertEquals(1,raiderPage.path("superRaids").asLong());
+        assertEquals(1,raiderPage.path("superTens").asLong());
+    }
     Map<String,Object> setup(UUID matchId) {
         var teams=IntStream.range(0,2).mapToObj(side->Map.of("name","Team "+side,"players",IntStream.range(0,7).mapToObj(i->Map.of("id",UUID.randomUUID(),"name","Player "+side+i,"phone","+9198765432"+side+i)).toList())).toList();
         return Map.of("matchId",matchId,"teams",teams,"firstTurn",0,"halfMinutes",20,"raidSeconds",30,"startedAt",1000);

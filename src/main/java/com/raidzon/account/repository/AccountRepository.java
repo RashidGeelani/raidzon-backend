@@ -8,7 +8,7 @@ import java.util.UUID;
 
 @Repository @Profile("postgres")
 public class AccountRepository {
-    private record Performance(long raidPoints, long tacklePoints, long superRaids, long superTackles, long superTens, long highFives) {}
+    public record Performance(long raidPoints, long tacklePoints, long superRaids, long superTackles, long superTens, long highFives) {}
     /** Kabaddi milestones per match: a Super 10 is 10+ raid points, a High 5 is 5+ tackle points. */
     static final int SUPER_TEN = 10, HIGH_FIVE = 5;
     private static final java.time.Duration NAME_CHANGE_INTERVAL = java.time.Duration.ofDays(30);
@@ -69,7 +69,7 @@ public class AccountRepository {
         AccountDashboard.PlayerProfile profile = null;
         if (!profiles.isEmpty()) {
             var selected = profiles.getFirst();
-            var totals = performance(selected.id());
+            var totals = performance(jdbc, selected.id(), false);
             profile = new AccountDashboard.PlayerProfile(selected.id(), selected.name(), selected.matchCount(),
                 totals.raidPoints(), totals.tacklePoints(), totals.superRaids(), totals.superTackles(),
                 totals.superTens(), totals.highFives());
@@ -93,7 +93,14 @@ public class AccountRepository {
             teamCount==null?0:teamCount,count==null?0:count,matches,false);
     }
 
-    private Performance performance(UUID profileId) {
+    /**
+     * A player's career totals over counted matches (COUNTED): raid and tackle points, super raids (3+ raid points in
+     * one raid, undone raids left out), super tackles (a tackle by the player that earned the super tackle point),
+     * Super 10s and High 5s (matches with 10+ raid / 5+ tackle points). tournamentOnly keeps to tournament fixtures,
+     * as the public player page does; the profile also counts legacy friendlies.
+     */
+    public static Performance performance(JdbcTemplate jdbc, UUID profileId, boolean tournamentOnly) {
+        String scope = tournamentOnly ? " AND EXISTS(SELECT 1 FROM tournament_fixtures pf WHERE pf.match_id=m.id) " : " ";
         var points = jdbc.queryForMap("""
             SELECT COALESCE(sum((player.value->>'raidPoints')::bigint),0) AS raid_points,
                    COALESCE(sum((player.value->>'tacklePoints')::bigint),0) AS tackle_points,
@@ -105,13 +112,13 @@ public class AccountRepository {
             CROSS JOIN LATERAL jsonb_array_elements(m.projection->'teams') AS team(value)
             CROSS JOIN LATERAL jsonb_array_elements(team.value->'players') AS player(value)
             WHERE l.profile_id=? AND player.value->>'id'=l.local_player_id::text
-              AND """ + COUNTED + """
+              AND """ + COUNTED + scope + """
             """, SUPER_TEN, HIGH_FIVE, profileId);
         var superCounts = jdbc.queryForMap("""
             WITH effective_raids AS (
                 SELECT e.match_id,e.event_id,e.components,l.local_player_id
                 FROM match_player_links l JOIN match_events e ON e.match_id=l.match_id
-                JOIN matches m ON m.id=l.match_id AND """ + COUNTED + """
+                JOIN matches m ON m.id=l.match_id AND """ + COUNTED + scope + """
                 WHERE l.profile_id=? AND e.request #>> '{intent,type}'='RAID'
                   AND NOT EXISTS (
                       SELECT 1 FROM match_events undo
