@@ -60,6 +60,20 @@ public final class AuthService {
         try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8))); }
         catch(Exception error) { throw new IllegalStateException(error); }
     }
+    /** Fresh phone verification lasts five minutes. */
+    public static final long FRESH_PROOF_MS = 300_000;
+    /**
+     * Uses up a proof that this account just verified its phone again on this same device: a separate token from a new
+     * OTP (never the session making the request), at most five minutes old, valid once. Runs in the caller's transaction,
+     * so a refused action leaves the proof unused.
+     */
+    public static boolean consumeFreshProof(JdbcTemplate jdbc, AuthIdentity identity, String sessionToken, String proof, long now) {
+        if (proof == null || proof.isBlank() || proof.equals(sessionToken)) return false;
+        return jdbc.update("""
+            UPDATE auth_tokens SET revoked=true WHERE token_hash=? AND account_id=? AND device_id=?
+            AND NOT revoked AND expires_at>? AND verified_at BETWEEN ? AND ?
+            """, hash(proof), identity.accountId(), identity.deviceId(), now, now - FRESH_PROOF_MS, now) == 1;
+    }
     private void device(UUID id,String secret) {
         require(id!=null && secret!=null && secret.matches("[A-Za-z0-9_-]{43}"),400,"INVALID_DEVICE","Device credentials are required.");
     }

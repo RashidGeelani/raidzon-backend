@@ -103,10 +103,10 @@ class PostgresMatchStoreTest {
     @Test void wrongAccountOrDeviceCannotWriteOrRetry() throws Exception {
         var request = event(0, 0);
         assertThrows(SecurityException.class, () -> service.append(setup.matchId(), request, UUID.randomUUID(), session));
-        assertThrows(SecurityException.class, () -> service.append(setup.matchId(), request, owner, UUID.randomUUID()));
+        assertEquals("SCORING_MOVED", assertThrows(com.raidzon.identity.service.AuthFailure.class, () -> service.append(setup.matchId(), request, owner, UUID.randomUUID())).code());
         assertEquals(0, count());
         service.append(setup.matchId(), request, owner, session);
-        assertThrows(SecurityException.class, () -> service.append(setup.matchId(), request, owner, UUID.randomUUID()));
+        assertEquals("SCORING_MOVED", assertThrows(com.raidzon.identity.service.AuthFailure.class, () -> service.append(setup.matchId(), request, owner, UUID.randomUUID())).code());
         assertEquals(1, count());
     }
     @Test void failedProjectionWriteRollsBackEventInsert() throws Exception {
