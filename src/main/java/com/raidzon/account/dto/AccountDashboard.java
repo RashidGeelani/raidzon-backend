@@ -13,7 +13,10 @@ public record AccountDashboard(UUID accountId, String phone, PlayerProfile playe
     public record PlayerProfile(UUID id, String name, long matchCount, long raidPoints,
                                 long tacklePoints, long superRaids, long superTackles,
                                 long superTens, long highFives) {}
-    /** practice: quick match with filled-in names; removed: taken down by a RaidzOn admin. Neither counts in stats. */
+    /**
+     * practice: quick match with filled-in names; removed: taken down by a RaidzOn admin. Neither counts in stats.
+     * scoringElsewhere: this account scores the unfinished match, but on another phone (it can be moved here).
+     */
     public record MatchSummary(UUID id, String teamA, String teamB, String status, int scoreA, int scoreB, long updatedAt,
-                               boolean practice, boolean removed) {}
+                               boolean practice, boolean removed, boolean scoringElsewhere) {}
 }

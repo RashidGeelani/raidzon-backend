@@ -67,6 +67,54 @@ public final class MatchService {
         });
     }
 
+    /** Everything a phone needs to rebuild a match and keep scoring it. events are the stored requests in order. */
+    public record Takeover(UUID matchId, String rulesetVersion, int version, MatchState setup, MatchState state,
+                           java.util.List<MatchEventRequest> events, MatchRepository.TakeoverFacts facts) {}
+    /** Takeovers (accepted or refused) per account and match per hour. */
+    static final int TAKEOVER_LIMIT = 6;
+    /**
+     * "Continue scoring here": the scoring account moves a live match to the phone making this request.
+     * Needs a fresh OTP proof (see AuthService.consumeFreshProof) unless this phone already scores the match;
+     * then it only returns the history again (a retried import, or the phone checking it is still the scorer).
+     * Moving the scoring device fences the old phone: its next upload gets SCORING_MOVED.
+     */
+    public Takeover takeover(UUID matchId, com.raidzon.identity.dto.AuthIdentity actor, String sessionToken, String proof) {
+        try {
+            return transaction.execute(status -> {
+                var match = repository.lock(matchId);
+                if (!match.scorer().equals(actor.accountId()))
+                    throw new com.raidzon.identity.service.AuthFailure(403, "NOT_MATCH_SCORER", "Only the account scoring this match can move it to another phone.");
+                if (!MatchEngine.supports(match.ruleset())) throw new IllegalArgumentException("Unsupported ruleset version.");
+                refuseDeleted(match);
+                var facts = repository.takeoverFacts(matchId);
+                if (!match.session().equals(actor.deviceId())) {
+                    if (proof == null) throw scoringMoved();
+                    if (repository.takeoversInLastHour(matchId, actor.accountId()) >= TAKEOVER_LIMIT)
+                        throw new com.raidzon.identity.service.AuthFailure(429, "RATE_LIMITED", "This match was moved too many times. Wait an hour and try again.");
+                    if (facts.removed()) throw new com.raidzon.identity.service.AuthFailure(409, "MATCH_REMOVED", "This match was removed by RaidzOn and can't be scored.");
+                    if (match.state().status() == MatchState.Status.COMPLETED)
+                        throw new com.raidzon.identity.service.AuthFailure(409, "MATCH_FINISHED", "This match is already finished. There is nothing left to score.");
+                    if (!com.raidzon.identity.service.AuthService.consumeFreshProof(repository.jdbc(), actor, sessionToken, proof, System.currentTimeMillis()))
+                        throw new com.raidzon.identity.service.AuthFailure(403, "VERIFICATION_REQUIRED", "Verify your phone number again. The code is valid for five minutes.");
+                    repository.recordTakeover(matchId, actor.accountId(), actor.deviceId(), "MOVED");
+                    repository.moveScoring(matchId, actor.deviceId());
+                }
+                var events = repository.events(matchId);
+                var history = replay(match, events); // refuses to hand out a history that doesn't rebuild to the stored score
+                return new Takeover(matchId, match.ruleset(), history.version(), match.initial(), history.state(),
+                        events.stream().map(MatchRepository.StoredEvent::request).toList(), facts);
+            });
+        } catch (com.raidzon.identity.service.AuthFailure refused) {
+            // Refused attempts are kept too (they count towards the limit). An old phone being told it lost the match is not an attempt.
+            if (!refused.code().equals("SCORING_MOVED") && !refused.code().equals("RATE_LIMITED"))
+                repository.recordTakeover(matchId, actor.accountId(), actor.deviceId(), refused.code());
+            throw refused;
+        }
+    }
+    private static com.raidzon.identity.service.AuthFailure scoringMoved() {
+        return new com.raidzon.identity.service.AuthFailure(403, "SCORING_MOVED", "This match is now being scored on another phone.");
+    }
+
     public MatchState rebuild(UUID matchId, UUID actor, UUID session) {
         return transaction.execute(status -> {
             var match = repository.lock(matchId); authorize(match, actor, session);
@@ -90,7 +138,9 @@ public final class MatchService {
         if (match.deleted()) throw new com.raidzon.identity.service.AuthFailure(410, "MATCH_DELETED", "This match was deleted by its organizer.");
     }
     private void authorize(MatchRepository.StoredMatch match, UUID actor, UUID session) {
-        if (!match.scorer().equals(actor) || !match.session().equals(session)) throw new SecurityException("This account or scoring session is read-only.");
+        if (!match.scorer().equals(actor)) throw new SecurityException("This account or scoring session is read-only.");
+        // Same account, other phone: the match was moved (or never scored here). The app locks it instead of retrying.
+        if (!match.session().equals(session)) throw scoringMoved();
         if (!MatchEngine.supports(match.ruleset())) throw new IllegalArgumentException("Unsupported ruleset version.");
     }
 }

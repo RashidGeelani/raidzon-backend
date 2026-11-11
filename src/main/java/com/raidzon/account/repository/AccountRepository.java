@@ -33,11 +33,7 @@ public class AccountRepository {
     @org.springframework.transaction.annotation.Transactional
     public void edit(com.raidzon.identity.dto.AuthIdentity identity, String name, String verificationToken) {
         long now = System.currentTimeMillis();
-        int proof = jdbc.update("""
-            UPDATE auth_tokens SET revoked=true WHERE token_hash=? AND account_id=? AND device_id=?
-            AND NOT revoked AND expires_at>? AND verified_at BETWEEN ? AND ?
-            """, com.raidzon.identity.service.AuthService.hash(verificationToken), identity.accountId(), identity.deviceId(), now, now-300_000, now);
-        if (proof != 1) throw new com.raidzon.identity.service.AuthFailure(403,"VERIFICATION_REQUIRED","Verify the same phone again before saving. Verification lasts five minutes.");
+        if (!com.raidzon.identity.service.AuthService.consumeFreshProof(jdbc, identity, null, verificationToken, now)) throw new com.raidzon.identity.service.AuthFailure(403,"VERIFICATION_REQUIRED","Verify the same phone again before saving. Verification lasts five minutes.");
         var profiles = jdbc.queryForList("""
             SELECT id, COALESCE(display_name, initial_name) AS current_name, display_name_changed_at FROM player_profiles
             WHERE claimed_by=? AND phone=(SELECT phone FROM user_accounts WHERE id=?) FOR UPDATE
@@ -57,7 +53,8 @@ public class AccountRepository {
             profile.get("id"), profile.get("current_name"), name);
         jdbc.update("UPDATE player_profiles SET display_name=?, display_name_changed_at=now() WHERE id=?", name, profile.get("id"));
     }
-    public AccountDashboard dashboard(UUID accountId) {
+    /** deviceId: the phone asking, so a live match scored on another phone can offer "Continue scoring here". */
+    public AccountDashboard dashboard(UUID accountId, UUID deviceId) {
         String phone = jdbc.queryForObject("SELECT phone FROM user_accounts WHERE id=?", String.class, accountId);
         var profiles = jdbc.query("""
             SELECT p.id,COALESCE(p.display_name,p.initial_name) AS initial_name,count(DISTINCT m.id) AS match_count
@@ -83,12 +80,13 @@ public class AccountRepository {
         var matches = jdbc.query("""
             SELECT id, projection #>> '{teams,0,name}' AS team_a, projection #>> '{teams,1,name}' AS team_b,
                    projection->>'status' AS status, (projection #>> '{scores,0}')::integer AS score_a,
-                   (projection #>> '{scores,1}')::integer AS score_b, updated_at, practice, removed_at IS NOT NULL AS removed
+                   (projection #>> '{scores,1}')::integer AS score_b, updated_at, practice, removed_at IS NOT NULL AS removed,
+                   (scoring_account_id=? AND scoring_session_id<>? AND removed_at IS NULL AND projection->>'status'<>'COMPLETED') AS scoring_elsewhere
             FROM matches WHERE owner_account_id=? AND deleted_at IS NULL ORDER BY updated_at DESC,id LIMIT 20
             """, (rs, index) -> new AccountDashboard.MatchSummary(rs.getObject("id", UUID.class),
                 rs.getString("team_a"), rs.getString("team_b"), rs.getString("status"),
                 rs.getInt("score_a"), rs.getInt("score_b"), rs.getTimestamp("updated_at").getTime(),
-                rs.getBoolean("practice"), rs.getBoolean("removed")), accountId);
+                rs.getBoolean("practice"), rs.getBoolean("removed"), rs.getBoolean("scoring_elsewhere")), accountId, deviceId, accountId);
         return new AccountDashboard(accountId,phone,profile,tournamentCount==null?0:tournamentCount,
             teamCount==null?0:teamCount,count==null?0:count,matches,false);
     }

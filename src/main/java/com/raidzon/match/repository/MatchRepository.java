@@ -17,6 +17,8 @@ public final class MatchRepository {
     private final JdbcTemplate jdbc;
     private final MatchJsonCodec codec;
     public MatchRepository(JdbcTemplate jdbc, MatchJsonCodec codec) { this.jdbc = jdbc; this.codec = codec; }
+    /** For checks that must run in the same transaction as a match write (e.g. a fresh OTP proof). */
+    public JdbcTemplate jdbc() { return jdbc; }
 
     public boolean insert(UUID id, UUID owner, UUID session, String ruleset, String fingerprint, MatchState state) {
         return insert(id, owner, session, ruleset, fingerprint, state, false);
@@ -59,6 +61,33 @@ public final class MatchRepository {
         int updated = jdbc.update("UPDATE matches SET projection = ?::jsonb, version = ?, updated_at = now() WHERE id = ? AND version = ?",
                 codec.write(event.result().state()), event.sequence(), matchId, request.baseVersion());
         if (updated != 1) throw new IllegalStateException("Projection version changed during event commit.");
+    }
+    /** What a phone taking over a match needs besides its history. fixtureId is null for a match outside a tournament. */
+    public record TakeoverFacts(boolean removed, boolean practice, long createdAt, UUID tournamentId, UUID fixtureId, boolean knockout) {}
+    public TakeoverFacts takeoverFacts(UUID matchId) {
+        return jdbc.queryForObject("""
+                SELECT m.removed_at IS NOT NULL AS removed, m.practice, m.created_at, f.tournament_id, f.id AS fixture_id,
+                       COALESCE(f.stage IN ('KNOCKOUT','THIRD_PLACE'), false) AS knockout
+                FROM matches m LEFT JOIN tournament_fixtures f ON f.match_id = m.id WHERE m.id = ?
+                """, (rs, row) -> new TakeoverFacts(rs.getBoolean("removed"), rs.getBoolean("practice"), rs.getTimestamp("created_at").getTime(),
+                        rs.getObject("tournament_id", UUID.class), rs.getObject("fixture_id", UUID.class), rs.getBoolean("knockout")), matchId);
+    }
+    /** The fence: from now on only this device can write the match. Call with the match locked. */
+    public void moveScoring(UUID matchId, UUID session) {
+        jdbc.update("UPDATE matches SET scoring_session_id = ? WHERE id = ?", session, matchId);
+    }
+    /** Audit row; from_session is the device scoring the match when the attempt was made. Nothing is written for an unknown match. */
+    public void recordTakeover(UUID matchId, UUID account, UUID toSession, String result) {
+        jdbc.update("""
+                INSERT INTO match_takeovers(match_id, account_id, from_session, to_session, result)
+                SELECT id, ?, scoring_session_id, ?, ? FROM matches WHERE id = ?
+                """, account, toSession, result, matchId);
+    }
+    public int takeoversInLastHour(UUID matchId, UUID account) {
+        Integer count = jdbc.queryForObject("""
+                SELECT count(*) FROM match_takeovers WHERE match_id = ? AND account_id = ? AND created_at > now() - interval '1 hour'
+                """, Integer.class, matchId, account);
+        return count == null ? 0 : count;
     }
     /** True when the match is linked to a knockout or third-place fixture, which cannot end in a draw. */
     public boolean linkedToKnockout(UUID matchId) {

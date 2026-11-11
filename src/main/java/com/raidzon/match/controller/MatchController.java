@@ -55,4 +55,26 @@ public class MatchController {
         var result=matches.append(matchId,request,actor.accountId(),actor.deviceId());var state=state(result.state());
         if(!result.duplicate())live.publish(matchId,result.currentVersion(),state);ObjectNode response=json.valueToTree(result);response.set("state",state);return response;
     }
+    /**
+     * "Continue scoring here". Body {"verificationToken": proof from a fresh OTP on this phone}; an empty body only
+     * re-reads the history on the phone that already scores the match. The score and version don't change, so
+     * spectators, the overlay and live pushes carry on untouched.
+     */
+    @PostMapping("/{matchId}/takeover") public JsonNode takeover(@PathVariable UUID matchId,@RequestBody JsonNode body,
+            @RequestAttribute("identity") AuthIdentity actor,@RequestAttribute("authToken") String token){
+        if(!body.isObject())throw new IllegalArgumentException("Expected a JSON object.");
+        body.fieldNames().forEachRemaining(field->{if(!field.equals("verificationToken"))throw new IllegalArgumentException("Unexpected field: "+field);});
+        var proof=body.path("verificationToken");
+        if(!proof.isMissingNode()&&!proof.isTextual())throw new IllegalArgumentException("Expected text field: verificationToken");
+        var result=matches.takeover(matchId,actor,token,proof.isTextual()?proof.asText():null);
+        ObjectNode response=json.createObjectNode();
+        response.put("matchId",result.matchId().toString()).put("rulesetVersion",result.rulesetVersion()).put("version",result.version());
+        response.set("setup",state(result.setup()));response.set("state",state(result.state()));
+        response.set("events",json.valueToTree(result.events()));
+        var facts=result.facts();
+        response.put("practice",facts.practice()).put("createdAt",facts.createdAt());
+        if(facts.fixtureId()==null)response.putNull("fixture");
+        else response.putObject("fixture").put("tournamentId",facts.tournamentId().toString()).put("fixtureId",facts.fixtureId().toString()).put("knockout",facts.knockout());
+        return response;
+    }
 }

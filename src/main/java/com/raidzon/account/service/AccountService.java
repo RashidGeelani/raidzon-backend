@@ -13,7 +13,7 @@ public class AccountService {
     public AccountService(AccountRepository accounts, com.raidzon.moderation.AdminAccess admins) { this.accounts=accounts; this.admins=admins; }
     /** admin: this account can review match reports (Profile shows the admin tools). */
     public AccountDashboard dashboard(AuthIdentity identity) {
-        return accounts.dashboard(identity.accountId()).withAdmin(admins.isAdmin(identity.accountId()));
+        return accounts.dashboard(identity.accountId(), identity.deviceId()).withAdmin(admins.isAdmin(identity.accountId()));
     }
     public void edit(AuthIdentity identity, String token, com.raidzon.account.dto.EditPlayerProfile input) {
         String name = input.name() == null ? "" : input.name().strip();
